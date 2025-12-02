@@ -45,6 +45,8 @@ class Sam3StreamInference(Sam3VideoBase):
         image_mean: Tuple[float, float, float] = (0.5, 0.5, 0.5),
         image_std: Tuple[float, float, float] = (0.5, 0.5, 0.5),
         compile_model: bool = False,
+        # memory bounding knobs (CPU ingress + bounded caches like offline)
+        max_cached_frames: int = 128,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -52,6 +54,7 @@ class Sam3StreamInference(Sam3VideoBase):
         self.image_mean = image_mean
         self.image_std = image_std
         self.compile_model = compile_model
+        self.max_cached_frames = max_cached_frames
 
     @torch.inference_mode()
     def init_stream_state(self) -> Dict[str, Any]:
@@ -123,9 +126,9 @@ class Sam3StreamInference(Sam3VideoBase):
         else:
             raise TypeError("Unsupported raw_image type; expected PIL, numpy, or torch.Tensor")
 
-        mean = torch.tensor(self.image_mean, dtype=torch.float16, device=self.device).view(3, 1, 1)
-        std = torch.tensor(self.image_std, dtype=torch.float16, device=self.device).view(3, 1, 1)
-        img_t = img_t.to(dtype=torch.float16, device=self.device)
+        mean = torch.tensor(self.image_mean, dtype=torch.float16, device="cpu").view(3, 1, 1)
+        std = torch.tensor(self.image_std, dtype=torch.float16, device="cpu").view(3, 1, 1)
+        img_t = img_t.to(dtype=torch.float16, device="cpu")
         img_t = (img_t - mean) / std
         return img_t, orig_h, orig_w
 
@@ -151,21 +154,26 @@ class Sam3StreamInference(Sam3VideoBase):
                 object_ids=[],
             )
             stage = convert_my_tensors(stage)
-            img_batch = img_t.unsqueeze(0)
+            # Keep images as a CPU list of tensors to match offline CPU offload path
+            img_batch = [img_t]
             input_batch = BatchedDatapoint(
-                img_batch=img_batch,
+                img_batch=img_batch,  # keep on CPU
                 find_text_batch=find_text_batch,
-                find_inputs=[copy_data_to_device(stage, self.device, non_blocking=True)],
+                find_inputs=[copy_data_to_device(stage, self.device, non_blocking=True)],  # stages on GPU
                 find_targets=[None],
                 find_metadatas=[None],
             )
-            input_batch = copy_data_to_device(input_batch, self.device, non_blocking=True)
             inference_state["input_batch"] = input_batch
             inference_state["curr_frame_idx"] = 0
         else:
             input_batch = inference_state["input_batch"]
-            T_prev = input_batch.img_batch.shape[0]
-            input_batch.img_batch = torch.cat([input_batch.img_batch, img_t.unsqueeze(0)], dim=0)
+            # Determine previous length and append
+            if isinstance(input_batch.img_batch, torch.Tensor):
+                T_prev = input_batch.img_batch.shape[0]
+                input_batch.img_batch = torch.cat([input_batch.img_batch, img_t.unsqueeze(0)], dim=0)
+            else:
+                T_prev = len(input_batch.img_batch)
+                input_batch.img_batch.append(img_t)
 
             input_box_embedding_dim = 258
             input_points_embedding_dim = 257
@@ -196,7 +204,8 @@ class Sam3StreamInference(Sam3VideoBase):
         inference_state["per_frame_cur_step"].append(0)
 
         # Update total frames and keep tracker states in sync with growing stream length
-        inference_state["num_frames"] = inference_state["input_batch"].img_batch.shape[0]
+        img_batch_ref = inference_state["input_batch"].img_batch
+        inference_state["num_frames"] = img_batch_ref.shape[0] if isinstance(img_batch_ref, torch.Tensor) else len(img_batch_ref)
         if inference_state["tracker_inference_states"]:
             for trk_state in inference_state["tracker_inference_states"]:
                 # Extend tracker-visible video length so it can propagate to this frame
@@ -205,6 +214,7 @@ class Sam3StreamInference(Sam3VideoBase):
                 if trk_state.get("video_height", None) is None:
                     trk_state["video_height"] = inference_state["orig_height"]
                     trk_state["video_width"] = inference_state["orig_width"]
+
         return inference_state["curr_frame_idx"]
 
     def _get_visual_prompt(self, inference_state, frame_idx, boxes_cxcywh, box_labels):
@@ -294,12 +304,11 @@ class Sam3StreamInference(Sam3VideoBase):
         self._compile_model()
         if frame_idx is None:
             frame_idx = inference_state["curr_frame_idx"]
-
         input_batch = inference_state["input_batch"]
         tracker_states_local = inference_state["tracker_inference_states"]
         has_text_prompt = inference_state["text_prompt"] is not None
         has_geometric_prompt = inference_state["per_frame_geometric_prompt"][frame_idx] is not None
-        num_frames_dynamic = input_batch.img_batch.shape[0]
+        num_frames_dynamic = input_batch.img_batch.shape[0] if isinstance(input_batch.img_batch, torch.Tensor) else len(input_batch.img_batch)
 
         (
             obj_id_to_mask,
@@ -331,8 +340,7 @@ class Sam3StreamInference(Sam3VideoBase):
         inference_state["tracker_metadata"] = tracker_metadata_new
         inference_state["previous_stages_out"][frame_idx] = "_THIS_FRAME_HAS_OUTPUTS_"
 
-        if self.rank == 0:
-            self._cache_frame_outputs(inference_state, frame_idx, obj_id_to_mask)
+        # Do not cache yet; caching happens after postprocess below (with suppression filtering)
 
         out = {
             "obj_id_to_mask": obj_id_to_mask,
@@ -468,11 +476,20 @@ class Sam3StreamInference(Sam3VideoBase):
             objects_to_exclude.update(removed_obj_ids)
         if unconfirmed_obj_ids is not None:
             objects_to_exclude.update(unconfirmed_obj_ids)
-        if objects_to_exclude:
-            for k in list(filtered_obj_id_to_mask.keys()):
-                if k in objects_to_exclude:
-                    filtered_obj_id_to_mask.pop(k, None)
+        for k in list(filtered_obj_id_to_mask.keys()):
+            if k in objects_to_exclude:
+                filtered_obj_id_to_mask.pop(k, None)
         inference_state["cached_frame_outputs"][frame_idx] = filtered_obj_id_to_mask
+        # Prune cached frames if exceeding limit
+        max_cached = self.max_cached_frames
+        if max_cached > 0:
+            cached_keys = sorted(
+                [k for k in inference_state["cached_frame_outputs"].keys() if isinstance(k, int)]
+            )
+            if len(cached_keys) > max_cached:
+                to_remove = cached_keys[: len(cached_keys) - max_cached]
+                for old_k in to_remove:
+                    inference_state["cached_frame_outputs"].pop(old_k, None)
 
     def _build_tracker_output(self, inference_state, frame_idx, refined_obj_id_to_mask=None):
         assert (

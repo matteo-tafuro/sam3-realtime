@@ -1,12 +1,12 @@
 import ctypes
 import os
-from typing import Optional, Iterator
+from dataclasses import dataclass
+from enum import Enum
+from typing import Iterator, Optional
 
 import cv2
 import numpy as np
 import yarp
-from enum import Enum
-from dataclasses import dataclass
 
 
 class FrameStatus(Enum):
@@ -34,16 +34,17 @@ class FrameRead:
     status: FrameStatus
     frame: Optional[np.ndarray] = None
 
+
 class InputStreamHandler:
     """Unified frame source abstraction with explicit read status.
 
     Supported kinds:
-      - video  : frames from a video file (blocking); EOS when finished.
-      - webcam : frames from a camera device (blocking until failure); EOS if capture ends.
-      - yarp   : frames from a YARP port (non-blocking); NO_FRAME when no new frame yet.
+      - video: frames from a video file (blocking); EOS when finished.
+      - webcam: frames from a camera device (blocking until failure); EOS if capture ends.
+      - yarp: frames from a YARP port (non-blocking); NO_FRAME when no new frame yet.
 
-    read() now returns a FrameRead object instead of raw frame / None.
-    This removes ambiguity: previously None could mean "no frame yet" (YARP) *or* end-of-stream (video/webcam).
+    read() returns a FrameRead object instead of simply returning raw frame / None.
+    This removes ambiguity: None could mean "no frame yet" (YARP) *or* end-of-stream (video/webcam).
 
     Typical usage:
         src = InputStreamHandler(kind="video", video_path="/path/to/video.mp4")
@@ -123,7 +124,9 @@ class InputStreamHandler:
                 return FrameRead(status=FrameStatus.NO_FRAME, frame=None)
             width = img_rgb.width()
             height = img_rgb.height()
-            char_array_ptr = ctypes.cast(int(img_rgb.getRawImage()), ctypes.POINTER(ctypes.c_char))
+            char_array_ptr = ctypes.cast(
+                int(img_rgb.getRawImage()), ctypes.POINTER(ctypes.c_char)
+            )
             bytes_data = ctypes.string_at(char_array_ptr, img_rgb.getRawImageSize())
             image_array = np.frombuffer(bytes_data, dtype=np.uint8)
             frame_rgb = image_array.reshape((height, width, 3))

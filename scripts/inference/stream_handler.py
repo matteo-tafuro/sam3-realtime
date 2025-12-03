@@ -6,7 +6,6 @@ from typing import Iterator, Optional
 
 import cv2
 import numpy as np
-import yarp
 
 
 class FrameStatus(Enum):
@@ -90,6 +89,13 @@ class InputStreamHandler:
                 raise RuntimeError(f"Failed to open webcam index {self.webcam_index}")
             self._cap = cap
         elif kind == "yarp":
+            try:
+                import yarp
+            except ImportError:
+                raise ImportError(
+                    "YARP library is not installed or not found. Please install it to use YARP input source."
+                )
+
             yarp.Network.init()
             self._yarp_initialized = True
             port = yarp.BufferedPortImageRgb()

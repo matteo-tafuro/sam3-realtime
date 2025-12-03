@@ -159,7 +159,7 @@ if __name__ == "__main__":
     frame_idx = 0
 
     frame_timestamps = []  # To compute output fps
-    video_frames = []  # Buffer of PIL.Image frames for final video save
+    video_frames = []  # Buffer of frames for final video save
 
     stop_processing = False
     try:
@@ -188,6 +188,17 @@ if __name__ == "__main__":
                             "session_id": session_id,
                             "frame_index": 0,
                             "text": TEXT_PROMPT,
+                        }
+                    )
+
+                # You can potentially add more prompts on later frames too
+                if frame_idx == 30:
+                    predictor.handle_request(
+                        {
+                            "type": "add_prompt",
+                            "session_id": session_id,
+                            "frame_index": 0,
+                            "text": "bottle",
                         }
                     )
 

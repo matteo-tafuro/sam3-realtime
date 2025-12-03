@@ -191,16 +191,16 @@ if __name__ == "__main__":
                         }
                     )
 
-                # You can potentially add more prompts on later frames too
-                if frame_idx == 30:
-                    predictor.handle_request(
-                        {
-                            "type": "add_prompt",
-                            "session_id": session_id,
-                            "frame_index": 0,
-                            "text": "bottle",
-                        }
-                    )
+                # # You can potentially add more prompts on later frames too
+                # if frame_idx == 30:
+                #     predictor.handle_request(
+                #         {
+                #             "type": "add_prompt",
+                #             "session_id": session_id,
+                #             "frame_index": 30,
+                #             "text": "bottle",
+                #         }
+                #     )
 
                 # Run per-frame inference
                 resp = predictor.handle_request(

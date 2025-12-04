@@ -13,7 +13,7 @@ from sam3.model_builder import build_sam3_stream_predictor
 from sam3.visualization_utils import render_masklet_frame
 
 YARP_IMAGE_PORT = "/depthCamera/rgbImage:i"
-TEXT_PROMPT = "hand"
+DEFAULT_TEXT_PROMPT = "hand"
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -36,6 +36,12 @@ if __name__ == "__main__":
     )
 
     # === Input source options ===
+    parser.add_argument(
+        "--text_prompt",
+        type=str,
+        default=DEFAULT_TEXT_PROMPT,
+        help=f"Text prompt for segmentation (default: '{DEFAULT_TEXT_PROMPT}')",
+    )
     parser.add_argument(
         "--stream_type",
         type=str,
@@ -117,7 +123,7 @@ if __name__ == "__main__":
     print("Arguments:")
     for arg, value in vars(args).items():
         print(f"  {arg}: {value}")
-    print(f"Starting realtime inference using text prompt: '{TEXT_PROMPT}'")
+    print(f"Starting realtime inference using text prompt: '{args.text_prompt}'")
 
     # Use datetime as video ID if run_output_name not specified
     if args.run_output_name is not None:
@@ -187,7 +193,7 @@ if __name__ == "__main__":
                             "type": "add_prompt",
                             "session_id": session_id,
                             "frame_index": 0,
-                            "text": TEXT_PROMPT,
+                            "text": args.text_prompt,
                         }
                     )
 
@@ -266,7 +272,7 @@ if __name__ == "__main__":
                 output_name=video_id,
                 output_dir=output_dir,
                 fps=effective_fps,
-                overlay_text=f"Text prompt: {TEXT_PROMPT}",
+                overlay_text=f"Text prompt: {args.text_prompt}",
             )
             print(
                 f"\nSaved video to {os.path.join(output_dir, video_id + '.mp4')} at {effective_fps:.2f} FPS."

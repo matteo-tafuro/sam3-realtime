@@ -24,6 +24,6 @@ For a command-line run, use `scripts/inference/video_stream.py`. It mirrors the 
   - `--save_images` / `--save_video`: store outputs under `outputs/<run_id>/`
   - `--run_output_name NAME`: set a custom run id (else datetime is used)
 
-## Current Limitations
+## Current Limitations and Known Issues
 - **Single-GPU streaming:** The provided streaming predictor targets one GPU. Multi-GPU support exists in the base model but isn’t integrated into the streaming predictor yet.
 - **Memory leaking**: There seems to be a memory leak during long streaming sessions. The cause is under investigation. I got an OOM after ~5 minutes of streaming at 480p on a NVIDIA GeForce RTX 3090.

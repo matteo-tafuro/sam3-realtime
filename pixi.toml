@@ -1,0 +1,37 @@
+[workspace]
+authors = ["Matteo Tafuro <tafuromatteo00@gmail.com>"]
+channels = ["conda-forge"]
+name = "sam3-realtime"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[system-requirements]
+cuda = "12.0"
+
+[dependencies]
+python = ">=3.10"
+timm = ">=1.0.17"
+numpy = ">=1.26"
+tqdm = "*"
+ftfy = ">=6.1.1"
+regex = "*"
+iopath = ">=0.1.10"
+typing_extensions = "*"
+huggingface_hub = "*"
+einops = ">=0.8.0"
+pytorch-gpu = "*"
+cuda-toolkit = "12.9.*"
+pycocotools = "*"
+psutil = "*"
+av = "*"
+yarp = "*"
+opencv = "*"
+pandas = ">=2.3.3,<3"
+scikit-image = ">=0.25.2,<0.26"
+scikit-learn = ">=1.7.2,<2"
+
+# editable install of SAM3 fork (in this repo root)
+[pypi-dependencies]
+sam3 = { path = ".", editable = true }
+
+[tasks]

@@ -24,59 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-dependencies = [
-    "timm>=1.0.17",
-    "numpy==1.26",
-    "tqdm",
-    "ftfy==6.1.1",
-    "regex",
-    "iopath>=0.1.10",
-    "typing_extensions",
-    "huggingface_hub",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest",
-    "pytest-cov",
-    "black==24.2.0",
-    "ufmt==2.8.0",
-    "ruff-api==0.1.0",
-    "usort==1.0.2",
-    "gitpython==3.1.31",
-    "yt-dlp",
-    "pandas",
-    "opencv-python",
-    "pycocotools",
-    "numba",
-    "python-rapidjson",
-]
-notebooks = [
-    "matplotlib",
-    "jupyter",
-    "notebook",
-    "ipywidgets",
-    "ipycanvas",
-    "ipympl",
-    "pycocotools",
-    "decord",
-    "opencv-python",
-    "einops",
-    "scikit-image",
-    "scikit-learn",
-]
-train = [
-    "hydra-core",
-    "submitit",
-    "tensorboard",
-    "zstandard",
-    "scipy",
-    "torchmetrics",
-    "fvcore",
-    "fairscale",
-    "scikit-image",
-    "scikit-learn",
-]
+dependencies = []
 
 [project.urls]
 "Homepage" = "https://github.com/facebookresearch/sam3"
@@ -109,20 +57,6 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
-
-[[tool.mypy.overrides]]
-module = [
-    "torch.*",
-    "torchvision.*",
-    "timm.*",
-    "numpy.*",
-    "PIL.*",
-    "tqdm.*",
-    "ftfy.*",
-    "regex.*",
-    "iopath.*",
-]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

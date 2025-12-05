@@ -151,3 +151,13 @@ Thumbs.db
 # BPE vocabulary files
 *.bpe
 *.vocab
+
+# Outputs
+outputs/
+
+# Github
+.github/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml

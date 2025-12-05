@@ -157,3 +157,7 @@ outputs/
 
 # Github
 .github/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml

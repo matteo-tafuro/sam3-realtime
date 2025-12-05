@@ -12,7 +12,7 @@ from stream_handler import FrameStatus, InputStreamHandler
 from sam3.model_builder import build_sam3_stream_predictor
 from sam3.visualization_utils import render_masklet_frame
 
-YARP_IMAGE_PORT = "/depthCamera/rgbImage:i"
+YARP_IMAGE_PORT = "/sam3/rgbImage:i"
 DEFAULT_TEXT_PROMPT = "hand"
 
 if __name__ == "__main__":

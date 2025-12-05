@@ -5,9 +5,47 @@
 This repository transforms [SAM3](https://github.com/facebookresearch/sam3)’s offline video inference into a live, real-time streaming pipeline. Instead of preloading and processing an entire video sequence offline, it ingests frames incrementally and performs per-frame inference on the fly. This allows SAM3 to work with any live video source (e.g. webcams, RTSP streams, [YARP](https://www.yarp.it/latest/index.html) ports), enabling online operation and expanding use cases to robotics, teleoperation, live surveillance, AR/VR and real-time content creation.
 
 ## Installation
-Follow the instructions in `README-ORIGINAL.md` for environment setup, dependencies and checkpoint authentication.
+This fork uses **Pixi** for environment management to provide fully reproducible setups with fast and stable dependency resolution.
+
+### 1. Install Pixi (if needed)
+As of December 2025, you can install Pixi on Linux and MacOS via:
+```bash
+curl -fsSL https://pixi.sh/install.sh | sh
+```
+Or if you prefer using `wget`:
+```bash
+wget -qO- https://pixi.sh/install.sh | sh
+```
+For Windows or more recent instructions, visit the [Pixi installation guide](https://pixi.sh/dev/installation/).
+
+### 2. Create the environment
+From the repository root:
+
+```bash
+pixi install
+```
+
+### 3. Enter the environment
+```bash
+pixi shell
+```
+
+### 4. Verify SAM3 loads from this fork
+```bash
+python -c "import sam3; print(sam3.__file__)"
+```
+
+You should see a path pointing to this repository, confirming the editable install.
 
 ## Quick Start
+
+
+⚠️ Before using SAM 3, please request access to the checkpoints on the SAM 3
+Hugging Face [repo](https://huggingface.co/facebook/sam3). Once accepted, you
+need to be authenticated to download the checkpoints. You can do this by running
+the following [steps](https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication)
+(e.g. `hf auth login` after generating an access token.)
+
 
 ### Demo Notebook
 Mirroring the original demo notebooks, `examples/sam3_stream_predictor_example.ipynb` demonstrates how to run SAM3 in real-time on a video stream. The notebook loads a video file, starts a streaming session, adds a text prompt on frame 0 and pushes frames incrementally, running per-frame inference with optional visualization and FPS reporting.

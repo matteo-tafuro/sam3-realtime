@@ -42,6 +42,12 @@ class Sam3StreamInference(Sam3VideoBase):
         compile_model: bool = False,
         # memory bounding knobs (CPU ingress + bounded caches like offline)
         max_cached_frames: int = 128,
+        # Upper bound on how many past frames keep their (large) tracker mask-memory
+        # tensors. Mirrors offline SAM3's `_trim_past_out` horizon (20 *
+        # max_obj_ptrs_in_encoder = 320). Frames older than this have their
+        # `maskmem_features`/`maskmem_pos_enc` dropped (and are made non-selectable),
+        # bounding GPU memory for long streams. Set to 0/None to disable.
+        mem_bank_max_frames: int = 320,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -50,6 +56,7 @@ class Sam3StreamInference(Sam3VideoBase):
         self.image_std = image_std
         self.compile_model = compile_model
         self.max_cached_frames = max_cached_frames
+        self.mem_bank_max_frames = mem_bank_max_frames
 
     @torch.inference_mode()
     def init_stream_state(self) -> Dict[str, Any]:
@@ -352,6 +359,10 @@ class Sam3StreamInference(Sam3VideoBase):
         inference_state["tracker_metadata"] = tracker_metadata_new
         inference_state["previous_stages_out"][frame_idx] = "_THIS_FRAME_HAS_OUTPUTS_"
 
+        # Bound tracker mask-memory growth for long streams by trimming the large
+        # per-frame memory tensors of frames that can no longer be attended to.
+        self._trim_tracker_memory(inference_state, frame_idx)
+
         # Do not cache yet; caching happens after postprocess below (with suppression filtering)
 
         out = {
@@ -517,6 +528,79 @@ class Sam3StreamInference(Sam3VideoBase):
 
     def get_cached_output_for_frame(self, inference_state: Dict[str, Any], frame_idx: int):
         return inference_state.get("cached_frame_outputs", {}).get(frame_idx, {})
+
+    @staticmethod
+    def _trim_frame_out(frame_out: dict) -> dict:
+        """Drop the large mask-memory tensors from a stored tracker frame output.
+
+        Mirrors offline SAM3's `_trim_past_out`: keeps the small tensors that the
+        object-pointer path may still read, and removes `maskmem_features` /
+        `maskmem_pos_enc` plus the `*_iou_score` keys. Removing `eff_iou_score`
+        makes the frame invisible to `frame_filter`, so it can never be selected
+        for mask-memory attention again -> the freed tensors are truly unreferenced.
+        """
+        trimmed = {}
+        for k in ("obj_ptr", "object_score_logits"):
+            if k in frame_out:
+                trimmed[k] = frame_out[k]
+        return trimmed
+
+    def _trim_tracker_memory(self, inference_state: Dict[str, Any], frame_idx: int) -> None:
+        """Bound the tracker mask-memory bank for unbounded (streaming) videos.
+
+        SAM2/SAM3's tracker stores per-frame `maskmem_features` in
+        `output_dict["non_cond_frame_outputs"]` (and per-object slices in
+        `output_dict_per_obj`). Offline inference tolerates this O(num_frames)
+        growth because videos are finite; a live stream would grow without bound
+        and eventually OOM. Here we replicate offline's proven `_trim_past_out`
+        trimming (see `Sam3TrackerBase.track_step`) but apply it to *both* the
+        shared dict and the per-object slices (which hold views onto the same
+        storage), so the GPU tensors actually get released.
+
+        Two tiers, matching offline:
+          * near (frame_idx - num_maskmem): trim only if the frame is low quality
+            (`eff_iou_score < mf_threshold`), i.e. already non-selectable.
+          * far (frame_idx - mem_bank_max_frames): trim unconditionally, beyond
+            any realistic `frame_filter` reach.
+        """
+        max_frames = self.mem_bank_max_frames
+        if not max_frames or max_frames <= 0:
+            return
+        tracker = self.tracker
+        use_sel = getattr(tracker, "use_memory_selection", False)
+        mf_threshold = getattr(tracker, "mf_threshold", 0.0)
+        r = getattr(tracker, "memory_temporal_stride_for_eval", 1)
+        near_idx = frame_idx - r * tracker.num_maskmem
+        far_idx = frame_idx - max_frames
+
+        for st in inference_state["tracker_inference_states"]:
+            main = st["output_dict"]["non_cond_frame_outputs"]
+            per_obj = [
+                d["non_cond_frame_outputs"]
+                for d in st.get("output_dict_per_obj", {}).values()
+            ]
+
+            frames_to_trim = []
+            # far horizon: unconditional
+            if far_idx >= 0:
+                mo = main.get(far_idx)
+                if mo is not None and mo.get("maskmem_features") is not None:
+                    frames_to_trim.append(far_idx)
+            # near horizon: only low-quality frames (already skipped by frame_filter)
+            if use_sel and near_idx >= 0 and near_idx != far_idx:
+                mo = main.get(near_idx)
+                if (
+                    mo is not None
+                    and mo.get("maskmem_features") is not None
+                    and mo.get("eff_iou_score", 1.0) < mf_threshold
+                ):
+                    frames_to_trim.append(near_idx)
+
+            for t in frames_to_trim:
+                main[t] = self._trim_frame_out(main[t])
+                for od in per_obj:
+                    if t in od and od[t].get("maskmem_features") is not None:
+                        od[t] = self._trim_frame_out(od[t])
 
     def _compile_model(self):
         is_compiled = getattr(self, "_model_is_compiled", False)

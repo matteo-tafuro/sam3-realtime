@@ -123,6 +123,13 @@ if __name__ == "__main__":
         "(~4x faster ingest). Note: GPU resampling differs slightly from PIL, so "
         "outputs may change marginally.",
     )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="torch.compile the model (~10-15%% faster steady-state). Incurs a "
+        "one-time compilation cost (~1-2 min) that is front-loaded via a warm-up "
+        "before streaming starts.",
+    )
 
     # ===============================
 
@@ -156,8 +163,15 @@ if __name__ == "__main__":
     # Initialize predictor (single-GPU streaming)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     predictor = build_sam3_stream_predictor(
-        device=device, fast_preprocess=args.fast_preprocess
+        device=device, fast_preprocess=args.fast_preprocess, compile=args.compile
     )
+
+    # Front-load torch.compile so the compilation cost is not paid on the first
+    # streamed frame (which would otherwise stall the live stream for ~1-2 min).
+    if args.compile:
+        print("Warming up torch.compile (one-time, may take 1-2 min)...")
+        predictor.handle_request({"type": "warm_up_compilation"})
+        print("Warm-up complete.")
 
     resp = predictor.handle_request({"type": "start_session"})
     session_id = resp["session_id"]

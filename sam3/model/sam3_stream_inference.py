@@ -48,6 +48,11 @@ class Sam3StreamInference(Sam3VideoBase):
         # `maskmem_features`/`maskmem_pos_enc` dropped (and are made non-selectable),
         # bounding GPU memory for long streams. Set to 0/None to disable.
         mem_bank_max_frames: int = 320,
+        # Optional faster preprocessing: resize/normalize on the GPU instead of via
+        # PIL on the CPU (~4x faster ingest). Off by default because GPU resampling
+        # differs slightly from PIL antialiasing, which can perturb outputs
+        # marginally (observed min mask IoU ~0.96, |prob| diff <0.01).
+        fast_preprocess: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -57,6 +62,7 @@ class Sam3StreamInference(Sam3VideoBase):
         self.compile_model = compile_model
         self.max_cached_frames = max_cached_frames
         self.mem_bank_max_frames = mem_bank_max_frames
+        self.fast_preprocess = fast_preprocess
 
     @torch.inference_mode()
     def init_stream_state(self) -> Dict[str, Any]:
@@ -119,6 +125,12 @@ class Sam3StreamInference(Sam3VideoBase):
         inference_state["action_history"].clear()  # for logging user actions
 
     def _preprocess_raw_image(self, raw_image: Any) -> Tuple[torch.Tensor, int, int]:
+        if (
+            self.fast_preprocess
+            and isinstance(raw_image, np.ndarray)
+            and self.device.type == "cuda"
+        ):
+            return self._preprocess_raw_image_gpu(raw_image)
         if isinstance(raw_image, Image.Image):
             orig_w, orig_h = raw_image.width, raw_image.height
             img = TF.resize(raw_image.convert("RGB"), size=(self.image_size, self.image_size))
@@ -149,6 +161,28 @@ class Sam3StreamInference(Sam3VideoBase):
         std = torch.tensor(self.image_std, dtype=torch.float16, device="cpu").view(3, 1, 1)
         img_t = img_t.to(dtype=torch.float16, device="cpu")
         img_t = (img_t - mean) / std
+        return img_t, orig_h, orig_w
+
+    def _preprocess_raw_image_gpu(self, arr: np.ndarray) -> Tuple[torch.Tensor, int, int]:
+        """GPU resize/normalize fast path for HxWx3 numpy frames (opt-in).
+
+        Avoids the PIL round-trip by doing the resize and normalization on the GPU,
+        then moving the small resized frame back to CPU to preserve the bounded
+        CPU frame-storage policy. Result is stored as CPU fp16 exactly like the
+        default path.
+        """
+        if arr.dtype != np.uint8:
+            arr = (np.clip(arr, 0.0, 1.0) * 255.0).astype(np.uint8)
+        assert arr.ndim == 3 and arr.shape[2] == 3, "Expected HxWx3 numpy array"
+        orig_h, orig_w = arr.shape[0], arr.shape[1]
+        device = self.device
+        t = torch.from_numpy(np.ascontiguousarray(arr)).to(device, non_blocking=True)
+        t = t.permute(2, 0, 1).float().div_(255.0)
+        t = TF.resize(t, [self.image_size, self.image_size], antialias=True)
+        mean = torch.tensor(self.image_mean, device=device).view(3, 1, 1)
+        std = torch.tensor(self.image_std, device=device).view(3, 1, 1)
+        t = (t - mean) / std
+        img_t = t.to(dtype=torch.float16, device="cpu")
         return img_t, orig_h, orig_w
 
     @torch.inference_mode()

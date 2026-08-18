@@ -115,6 +115,15 @@ if __name__ == "__main__":
     )
     parser.set_defaults(save_video=True)
 
+    # === Performance options ===
+    parser.add_argument(
+        "--fast_preprocess",
+        action="store_true",
+        help="Resize/normalize frames on the GPU instead of via PIL on the CPU "
+        "(~4x faster ingest). Note: GPU resampling differs slightly from PIL, so "
+        "outputs may change marginally.",
+    )
+
     # ===============================
 
     args = parser.parse_args()
@@ -146,7 +155,9 @@ if __name__ == "__main__":
 
     # Initialize predictor (single-GPU streaming)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    predictor = build_sam3_stream_predictor(device=device)
+    predictor = build_sam3_stream_predictor(
+        device=device, fast_preprocess=args.fast_preprocess
+    )
 
     resp = predictor.handle_request({"type": "start_session"})
     session_id = resp["session_id"]

@@ -836,6 +836,7 @@ def build_sam3_stream_model(
     apply_temporal_disambiguation: bool = True,
     device="cuda" if torch.cuda.is_available() else "cpu",
     compile: bool = False,
+    fast_preprocess: bool = False,
 ) -> Sam3StreamInference:
     """Build the single-GPU streaming inference model (Sam3StreamInference).
 
@@ -912,6 +913,7 @@ def build_sam3_stream_model(
             image_mean=(0.5, 0.5, 0.5),
             image_std=(0.5, 0.5, 0.5),
             compile_model=compile,
+            fast_preprocess=fast_preprocess,
         )
     else:
         model = Sam3StreamInference(
@@ -938,6 +940,7 @@ def build_sam3_stream_model(
             image_mean=(0.5, 0.5, 0.5),
             image_std=(0.5, 0.5, 0.5),
             compile_model=compile,
+            fast_preprocess=fast_preprocess,
         )
 
     if load_from_HF and checkpoint_path is None:

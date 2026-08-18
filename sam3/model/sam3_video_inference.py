@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import logging
 from collections import defaultdict
 
@@ -7,7 +9,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-
 from sam3 import perflib
 from sam3.logger import get_logger
 from sam3.model.act_ckpt_utils import clone_output_wrapper
@@ -55,6 +56,7 @@ class Sam3VideoInference(Sam3VideoBase):
         self,
         resource_path,
         offload_video_to_cpu=False,
+        offload_state_to_cpu=False,
         async_loading_frames=False,
         video_loader_type="cv2",
     ):
@@ -70,6 +72,7 @@ class Sam3VideoInference(Sam3VideoBase):
         )
         inference_state = {}
         inference_state["image_size"] = self.image_size
+        inference_state["offload_state_to_cpu"] = offload_state_to_cpu
         inference_state["num_frames"] = len(images)
         # the original video height and width, used for resizing final output scores
         inference_state["orig_height"] = orig_height
@@ -550,20 +553,19 @@ class Sam3VideoInference(Sam3VideoBase):
     def _build_tracker_output(
         self, inference_state, frame_idx, refined_obj_id_to_mask=None
     ):
-        assert (
+        if (
             "cached_frame_outputs" in inference_state
             and frame_idx in inference_state["cached_frame_outputs"]
-        ), "No cached outputs found. Ensure normal propagation has run first to populate the cache."
-        cached_outputs = inference_state["cached_frame_outputs"][frame_idx]
+        ):
+            obj_id_to_mask = inference_state["cached_frame_outputs"][frame_idx].copy()
+        else:
+            obj_id_to_mask = {}
 
-        obj_id_to_mask = cached_outputs.copy()
-
-        # Update with refined masks if provided
         if refined_obj_id_to_mask is not None:
             for obj_id, refined_mask in refined_obj_id_to_mask.items():
-                assert (
-                    refined_mask is not None
-                ), f"Refined mask data must be provided for obj_id {obj_id}"
+                assert refined_mask is not None, (
+                    f"Refined mask data must be provided for obj_id {obj_id}"
+                )
                 obj_id_to_mask[obj_id] = refined_mask
 
         return obj_id_to_mask
@@ -624,7 +626,7 @@ class Sam3VideoInference(Sam3VideoBase):
         ## Compile Tracker model components
         self.tracker.maskmem_backbone.forward = compile_wrapper(
             self.tracker.maskmem_backbone.forward,
-            mode="max-autotune",
+            mode="max-autotune-no-cudagraphs",
             fullgraph=True,
             dynamic=False,
         )
@@ -658,12 +660,12 @@ class Sam3VideoInference(Sam3VideoBase):
         for i, thresh in enumerate(new_det_score_thresh_list):
             self.new_det_thresh = thresh
             for num_objects in num_objects_list:
-                logger.info(f"{i+1}/{num_rounds} warming up model compilation")
+                logger.info(f"{i + 1}/{num_rounds} warming up model compilation")
                 self.add_prompt(
                     inference_state, frame_idx=start_frame_idx, text_str="cat"
                 )
                 logger.info(
-                    f"{i+1}/{num_rounds} warming up model compilation -- simulating {num_objects}/{self.num_obj_for_compile} objects"
+                    f"{i + 1}/{num_rounds} warming up model compilation -- simulating {num_objects}/{self.num_obj_for_compile} objects"
                 )
                 inference_state = self.add_fake_objects_to_inference_state(
                     inference_state, num_objects, frame_idx=start_frame_idx
@@ -688,7 +690,7 @@ class Sam3VideoInference(Sam3VideoBase):
                     pass
                 self.reset_state(inference_state)
                 logger.info(
-                    f"{i+1}/{num_rounds} warming up model compilation -- completed round {i+1} out of {num_rounds}"
+                    f"{i + 1}/{num_rounds} warming up model compilation -- completed round {i + 1} out of {num_rounds}"
                 )
 
         # Warm up Tracker memory encoder with varying input shapes
@@ -852,12 +854,12 @@ class Sam3VideoInference(Sam3VideoBase):
         logger.debug("Running add_prompt on frame %d", frame_idx)
 
         num_frames = inference_state["num_frames"]
-        assert (
-            text_str is not None or boxes_xywh is not None
-        ), "at least one type of prompt (text, boxes) must be provided"
-        assert (
-            0 <= frame_idx < num_frames
-        ), f"{frame_idx=} is out of range for a total of {num_frames} frames"
+        assert text_str is not None or boxes_xywh is not None, (
+            "at least one type of prompt (text, boxes) must be provided"
+        )
+        assert 0 <= frame_idx < num_frames, (
+            f"{frame_idx=} is out of range for a total of {num_frames} frames"
+        )
 
         # since it's a semantic prompt, we start over
         self.reset_state(inference_state)
@@ -909,7 +911,9 @@ class Sam3VideoInference(Sam3VideoBase):
         # set the model to single GPU for benchmark evaluation (to be compatible with trainer)
         orig_rank = self.rank
         orig_world_size = self.world_size
+        # pyrefly: ignore [bad-argument-type]
         self.rank = self.detector.rank = 0
+        # pyrefly: ignore [bad-argument-type]
         self.world_size = self.detector.world_size = 1
 
         # get data
@@ -950,7 +954,9 @@ class Sam3VideoInference(Sam3VideoBase):
         preds = self.prep_for_evaluator(input.raw_images, tracking_res, scores_labels)
 
         # revert the model to the original GPU and rank
+        # pyrefly: ignore [bad-argument-type]
         self.rank = self.detector.rank = orig_rank
+        # pyrefly: ignore [bad-argument-type]
         self.world_size = self.detector.world_size = orig_world_size
         return {video_id: preds}
 
@@ -987,6 +993,7 @@ class Sam3VideoInferenceWithInstanceInteractivity(Sam3VideoInference):
             video_height=inference_state["orig_height"],
             video_width=inference_state["orig_width"],
             num_frames=inference_state["num_frames"],
+            offload_state_to_cpu=inference_state.get("offload_state_to_cpu", False),
         )
 
     @torch.inference_mode()
@@ -1198,9 +1205,9 @@ class Sam3VideoInferenceWithInstanceInteractivity(Sam3VideoInference):
             "propagation_partial",
             "propagation_fetch",
         ]
-        assert (
-            action_type in instance_actions + propagation_actions
-        ), f"Invalid action type: {action_type}, must be one of {instance_actions + propagation_actions}"
+        assert action_type in instance_actions + propagation_actions, (
+            f"Invalid action type: {action_type}, must be one of {instance_actions + propagation_actions}"
+        )
         action = {
             "type": action_type,
             "frame_idx": frame_idx,
@@ -1368,12 +1375,12 @@ class Sam3VideoInferenceWithInstanceInteractivity(Sam3VideoInference):
     ):
         if points is not None:
             # Tracker instance prompts
-            assert (
-                text_str is None and boxes_xywh is None
-            ), "When points are provided, text_str and boxes_xywh must be None."
-            assert (
-                obj_id is not None
-            ), "When points are provided, obj_id must be provided."
+            assert text_str is None and boxes_xywh is None, (
+                "When points are provided, text_str and boxes_xywh must be None."
+            )
+            assert obj_id is not None, (
+                "When points are provided, obj_id must be provided."
+            )
             return self.add_tracker_new_points(
                 inference_state,
                 frame_idx,
@@ -1489,9 +1496,9 @@ class Sam3VideoInferenceWithInstanceInteractivity(Sam3VideoInference):
                 tracker_states = self._get_tracker_inference_states_by_obj_ids(
                     inference_state, [obj_id]
                 )
-                assert (
-                    len(tracker_states) == 1
-                ), f"[rank={self.rank}] Multiple Tracker inference states found for the same object id."
+                assert len(tracker_states) == 1, (
+                    f"[rank={self.rank}] Multiple Tracker inference states found for the same object id."
+                )
                 tracker_state = tracker_states[0]
 
             # log

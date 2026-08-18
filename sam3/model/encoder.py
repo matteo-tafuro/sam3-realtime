@@ -1,6 +1,8 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 # Based on https://github.com/IDEA-Research/GroundingDINO
 
+# pyre-unsafe
+
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -110,6 +112,7 @@ class TransformerEncoderLayer(nn.Module):
         Returns:
             Processed tensor
         """
+        # pyrefly: ignore [unsupported-operation]
         q = k = tgt + query_pos if self.pos_enc_at_attn else tgt
 
         # Self attention
@@ -184,6 +187,7 @@ class TransformerEncoderLayer(nn.Module):
         tgt = tgt + self.dropout1(tgt2)
         if dac:
             # Recombine
+            # pyrefly: ignore [unbound-name]
             tgt = torch.cat((tgt, other_tgt), dim=0)
         tgt2 = self.norm2(tgt)
         tgt2 = self.cross_attn_image(
@@ -320,9 +324,9 @@ class TransformerEncoder(nn.Module):
         return reference_points
 
     def _prepare_multilevel_features(self, srcs, masks, pos_embeds):
-        assert (
-            len(srcs) == self.num_feature_levels
-        ), "mismatch between expected and received # of feature levels"
+        assert len(srcs) == self.num_feature_levels, (
+            "mismatch between expected and received # of feature levels"
+        )
 
         src_flatten = []
         mask_flatten = []
@@ -404,9 +408,9 @@ class TransformerEncoder(nn.Module):
             - spatial_shapes: Spatial dimensions of each feature level
             - valid_ratios: Valid ratios for each feature level
         """
-        assert (
-            len(src) == self.num_feature_levels
-        ), "must be equal to num_feature_levels"
+        assert len(src) == self.num_feature_levels, (
+            "must be equal to num_feature_levels"
+        )
         if src_key_padding_masks is not None:
             assert len(src_key_padding_masks) == self.num_feature_levels
         if pos is not None:
@@ -510,6 +514,7 @@ class TransformerEncoderFusion(TransformerEncoder):
         # Not needed here
         return None
 
+    # pyrefly: ignore [bad-override]
     def forward(
         self,
         src: List[Tensor],
@@ -526,19 +531,27 @@ class TransformerEncoderFusion(TransformerEncoder):
         if feat_sizes is not None:
             assert len(feat_sizes) == len(src)
             if src_key_padding_mask is None:
+                # pyrefly: ignore [bad-assignment]
                 src_key_padding_mask = [None] * len(src)
+            # pyrefly: ignore [not-iterable]
             for i, (h, w) in enumerate(feat_sizes):
                 src[i] = src[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
+                # pyrefly: ignore [unsupported-operation]
                 src_pos[i] = src_pos[i].reshape(h, w, bs, -1).permute(2, 3, 0, 1)
+                # pyrefly: ignore [unsupported-operation]
                 src_key_padding_mask[i] = (
+                    # pyrefly: ignore [unsupported-operation]
                     src_key_padding_mask[i].reshape(h, w, bs).permute(2, 0, 1)
-                    if src_key_padding_mask[i] is not None
+                    if src_key_padding_mask[  # pyrefly: ignore [unsupported-operation]
+                        i
+                    ]  # pyrefly: ignore [unsupported-operation]
+                    is not None  # pyrefly: ignore [unsupported-operation]
                     else None
                 )
         else:
-            assert all(
-                x.dim == 4 for x in src
-            ), "expected list of (bs, c, h, w) tensors"
+            assert all(x.dim == 4 for x in src), (
+                "expected list of (bs, c, h, w) tensors"
+            )
 
         if self.add_pooled_text_to_img_feat:
             # Fusion: Add mean pooled text to image features

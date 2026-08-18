@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 """
 COCO evaluator that works in distributed mode.
 
@@ -16,19 +18,15 @@ import os
 import pickle
 from collections import defaultdict
 from pathlib import Path
-
 from typing import Any, List, Optional
 
 import numpy as np
-
 import pycocotools.mask as mask_utils
 import torch
 from iopath.common.file_io import g_pathmgr
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
-
 from sam3.train.masks_ops import rle_encode
-
 from sam3.train.utils.distributed import (
     all_gather,
     gather_to_rank_0_via_filesys,
@@ -157,6 +155,7 @@ class CocoEvaluator:
                 print(f"{k}: {len(v)}")
 
     def set_sync_device(self, device: torch.device) -> Any:
+        # pyre-fixme[16]: `CocoEvaluator` has no attribute `_sync_device`.
         self._sync_device = device
 
     def _evaluate(self, *args, **kwargs):
@@ -753,9 +752,9 @@ def loadRes(self, resFile):
         anns = resFile
     assert type(anns) == list, "results in not an array of objects"
     annsImgIds = [ann["image_id"] for ann in anns]
-    assert set(annsImgIds) == (
-        set(annsImgIds) & set(self.getImgIds())
-    ), "Results do not correspond to current coco set"
+    assert set(annsImgIds) == (set(annsImgIds) & set(self.getImgIds())), (
+        "Results do not correspond to current coco set"
+    )
     if "caption" in anns[0]:
         imgIds = set([img["id"] for img in res.dataset["images"]]) & set(
             [ann["image_id"] for ann in anns]

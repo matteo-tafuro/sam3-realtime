@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import contextlib
 import fnmatch
 import gc
@@ -13,28 +15,22 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
-
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from hydra.utils import instantiate
 from iopath.common.file_io import g_pathmgr
-
 from sam3.model.data_misc import BatchedDatapoint
 from sam3.model.model_misc import SAM3Output
 from sam3.model.utils.misc import copy_data_to_device
-
 from sam3.train.optim.optimizer import construct_optimizer
-
 from sam3.train.utils.checkpoint_utils import (
     assert_skipped_parameters_are_frozen,
     exclude_params_matching_unix_pattern,
     load_state_dict_into_model,
     with_check_parameter_frozen,
 )
-
 from sam3.train.utils.distributed import all_reduce_max, barrier, get_rank
-
 from sam3.train.utils.logger import Logger, setup_logging
 from sam3.train.utils.train_utils import (
     AverageMeter,
@@ -72,6 +68,7 @@ class OptimAMPConf:
 
 @dataclass
 class OptimConf:
+    # pyre-fixme[8]: Attribute has type `Optimizer`; used as `None`.
     optimizer: torch.optim.Optimizer = None
     options: Optional[Dict[str, Any]] = None
     param_group_modifiers: Optional[List] = None
@@ -115,6 +112,7 @@ class CheckpointConf:
     save_freq: int
     save_list: List[int] = field(default_factory=list)
     model_weight_initializer: Any = None
+    # pyre-fixme[8]: Attribute has type `List[str]`; used as `None`.
     save_best_meters: List[str] = None
     skip_saving_parameters: List[str] = field(default_factory=list)
     initialize_after_preemption: Optional[bool] = None
@@ -161,7 +159,9 @@ class Trainer:
         accelerator: str = "cuda",
         seed_value: int = 123,
         val_epoch_freq: int = 1,
+        # pyre-fixme[9]: distributed has type `Dict[str, bool]`; used as `None`.
         distributed: Dict[str, bool] = None,
+        # pyre-fixme[9]: cuda has type `Dict[str, bool]`; used as `None`.
         cuda: Dict[str, bool] = None,
         env_variables: Optional[Dict[str, Any]] = None,
         optim: Optional[Dict[str, Any]] = None,
@@ -187,7 +187,12 @@ class Trainer:
         self.meters_conf = meters
         self.loss_conf = loss
         self.gradient_accumulation_steps = gradient_accumulation_steps
+        # pyre-fixme[9]: distributed has type `Dict[str, bool]`; used as
+        #  `DistributedConf`.
+        # pyre-fixme[6]: For 1st argument expected `Optional[str]` but got
+        #  `Union[bool, _VT]`.
         distributed = DistributedConf(**distributed or {})
+        # pyre-fixme[9]: cuda has type `Dict[str, bool]`; used as `CudaConf`.
         cuda = CudaConf(**cuda or {})
         self.where = 0.0
 
@@ -213,21 +218,22 @@ class Trainer:
         set_seeds(seed_value, self.max_epochs, self.distributed_rank)
         log_env_variables()
 
-        assert (
-            is_dist_avail_and_initialized()
-        ), "Torch distributed needs to be initialized before calling the trainer."
+        assert is_dist_avail_and_initialized(), (
+            "Torch distributed needs to be initialized before calling the trainer."
+        )
 
         self._setup_components()  # Except Optimizer everything is setup here.
         self._move_to_device()
         self._construct_optimizers()
         self._setup_dataloaders()
 
+        # pyre-fixme[16]: `Trainer` has no attribute `device`.
         self.time_elapsed_meter = DurationMeter("Time Elapsed", self.device, ":.2f")
 
         if self.checkpoint_conf.resume_from is not None:
-            assert os.path.exists(
-                self.checkpoint_conf.resume_from
-            ), f"The 'resume_from' checkpoint {self.checkpoint_conf.resume_from} does not exist!"
+            assert os.path.exists(self.checkpoint_conf.resume_from), (
+                f"The 'resume_from' checkpoint {self.checkpoint_conf.resume_from} does not exist!"
+            )
             dst = os.path.join(self.checkpoint_conf.save_dir, "checkpoint.pt")
             if self.distributed_rank == 0 and not os.path.exists(dst):
                 # Copy the "resume_from" checkpoint to the checkpoint folder
@@ -454,6 +460,7 @@ class Trainer:
         self.steps = checkpoint["steps"]
         self.ckpt_time_elapsed = checkpoint.get("time_elapsed")
 
+        # pyre-fixme[16]: `Optional` has no attribute `enabled`.
         if self.optim_conf.amp.enabled and "scaler" in checkpoint:
             self.scaler.load_state_dict(checkpoint["scaler"])
 
@@ -475,9 +482,9 @@ class Trainer:
             return self.loss[key]
 
         assert key != "all", "Loss must be specified for key='all'"
-        assert (
-            "default" in self.loss
-        ), f"Key {key} not found in losss, and no default provided"
+        assert "default" in self.loss, (
+            f"Key {key} not found in losss, and no default provided"
+        )
         return self.loss["default"]
 
     def _find_meter(self, phase: str, key: str):
@@ -495,7 +502,9 @@ class Trainer:
         model: nn.Module,
         phase: str,
     ):
+        # pyre-fixme[16]: `BatchedDatapoint` has no attribute `popitem`.
         key, batch = batch.popitem()
+        # pyre-fixme[16]: `Trainer` has no attribute `device`.
         batch = copy_data_to_device(batch, self.device, non_blocking=True)
 
         find_stages = model(batch)
@@ -920,17 +929,21 @@ class Trainer:
         self.optim.zero_grad(set_to_none=True)
 
         if self.gradient_accumulation_steps > 1:
-            assert isinstance(
-                batch, list
-            ), f"Expected a list of batches, got {type(batch)}"
-            assert (
-                len(batch) == self.gradient_accumulation_steps
-            ), f"Expected {self.gradient_accumulation_steps} batches, got {len(batch)}"
+            assert isinstance(batch, list), (
+                f"Expected a list of batches, got {type(batch)}"
+            )
+            assert len(batch) == self.gradient_accumulation_steps, (
+                f"Expected {self.gradient_accumulation_steps} batches, got {len(batch)}"
+            )
             accum_steps = len(batch)
         else:
             accum_steps = 1
+            # pyre-fixme[9]: batch has type `BatchedDatapoint`; used as
+            #  `List[BatchedDatapoint]`.
             batch = [batch]
 
+        # pyre-fixme[6]: For 1st argument expected `Iterable[_T]` but got
+        #  `BatchedDatapoint`.
         for i, chunked_batch in enumerate(batch):
             ddp_context = (
                 self.model.no_sync()
@@ -940,7 +953,9 @@ class Trainer:
             with ddp_context:
                 with torch.amp.autocast(
                     device_type="cuda",
+                    # pyre-fixme[16]: `Optional` has no attribute `enabled`.
                     enabled=self.optim_conf.amp.enabled,
+                    # pyre-fixme[16]: `Optional` has no attribute `amp_dtype`.
                     dtype=get_amp_type(self.optim_conf.amp.amp_dtype),
                 ):
                     loss_dict, batch_size, extra_losses = self._step(
@@ -965,7 +980,11 @@ class Trainer:
                 for extra_loss_key, extra_loss in extra_losses.items():
                     if extra_loss_key not in extra_loss_mts:
                         extra_loss_mts[extra_loss_key] = AverageMeter(
-                            extra_loss_key, self.device, ":.2e"
+                            # pyre-fixme[16]: `Trainer` has no attribute `device`.
+                            extra_loss_key,
+                            # pyre-fixme[16]: `Trainer` has no attribute `device`.
+                            self.device,
+                            ":.2e",
                         )
                     extra_loss_mts[extra_loss_key].update(extra_loss.item(), batch_size)
 
@@ -1037,9 +1056,9 @@ class Trainer:
     def _check_val_key_match(self, val_keys, phase):
         if val_keys is not None:
             # Check if there are any duplicates
-            assert len(val_keys) == len(
-                set(val_keys)
-            ), f"Duplicate keys in val datasets, keys: {val_keys}"
+            assert len(val_keys) == len(set(val_keys)), (
+                f"Duplicate keys in val datasets, keys: {val_keys}"
+            )
 
             # Check that the keys match the meter keys
             if self.meters_conf is not None and phase in self.meters_conf:
@@ -1053,9 +1072,9 @@ class Trainer:
                 loss_keys = set(self.loss_conf.keys()) - set(["all"])
                 if "default" not in loss_keys:
                     for k in val_keys:
-                        assert (
-                            k in loss_keys
-                        ), f"Error: key {k} is not defined in the losses, and no default is set"
+                        assert k in loss_keys, (
+                            f"Error: key {k} is not defined in the losses, and no default is set"
+                        )
 
     def _setup_components(self):
         # Get the keys for all the val datasets, if any

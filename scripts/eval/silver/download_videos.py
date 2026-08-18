@@ -1,4 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
+
+# pyre-unsafe
 import ast
 import concurrent.futures
 import os
@@ -8,8 +10,10 @@ import sys
 from concurrent.futures import as_completed, ThreadPoolExecutor
 from pathlib import Path
 
+# pyrefly: ignore [missing-source-for-stubs]
 import yt_dlp
 
+# pyrefly: ignore [missing-import]
 from utils import (
     annotation_files,
     config,
@@ -242,9 +246,9 @@ def download_sav():
 def main():
     assert len(sys.argv) > 1, "You have to provide the name of the dataset"
     dataset_name = sys.argv[1]
-    assert (
-        dataset_name in annotation_files
-    ), f"The dataset can be one of {list(annotation_files.keys())}"
+    assert dataset_name in annotation_files, (
+        f"The dataset can be one of {list(annotation_files.keys())}"
+    )
 
     if dataset_name == "yt1b":
         download_youtube()

@@ -1,4 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
+
+# pyre-unsafe
 import argparse
 import json
 import os
@@ -6,6 +8,8 @@ from multiprocessing import Pool
 from pathlib import Path
 
 import requests
+
+# pyrefly: ignore [missing-import]
 from fathomnet.api import images
 from tqdm import tqdm
 

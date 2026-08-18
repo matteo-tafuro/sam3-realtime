@@ -1,19 +1,21 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import contextlib
 import os
 import queue
 import re
 import time
+import types
 from threading import Condition, get_ident, Lock, Thread
+from typing import Any, Optional, Union
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
-
 from PIL import Image
-
 from sam3.logger import get_logger
 from tqdm import tqdm
 
@@ -27,20 +29,22 @@ VIDEO_EXTS = [".mp4", ".mov", ".avi", ".mkv", ".webm"]
 
 
 def load_resource_as_video_frames(
-    resource_path,
-    image_size,
-    offload_video_to_cpu,
-    img_mean=(0.5, 0.5, 0.5),
-    img_std=(0.5, 0.5, 0.5),
-    async_loading_frames=False,
-    video_loader_type="cv2",
-):
+    resource_path: Union[str, list],
+    image_size: int,
+    offload_video_to_cpu: bool,
+    img_mean: tuple[float, float, float] = (0.5, 0.5, 0.5),
+    img_std: tuple[float, float, float] = (0.5, 0.5, 0.5),
+    async_loading_frames: bool = False,
+    video_loader_type: str = "cv2",
+) -> tuple[Any, int, int]:
     """
     Load video frames from either a video or an image (as a single-frame video).
     Alternatively, if input is a list of PIL images, convert its format
     """
     if isinstance(resource_path, list):
+        # pyrefly: ignore [bad-assignment]
         img_mean = torch.tensor(img_mean, dtype=torch.float16)[:, None, None]
+        # pyrefly: ignore [bad-assignment]
         img_std = torch.tensor(img_std, dtype=torch.float16)[:, None, None]
         assert all(isinstance(img_pil, Image.Image) for img_pil in resource_path)
         assert len(resource_path) is not None
@@ -58,7 +62,9 @@ def load_resource_as_video_frames(
             # float16 precision should be sufficient for image tensor storage
             img = img.to(dtype=torch.float16)
             # normalize by mean and std
+            # pyrefly: ignore [unsupported-operation]
             img -= img_mean
+            # pyrefly: ignore [unsupported-operation]
             img /= img_std
             images.append(img)
         images = torch.stack(images)
@@ -91,24 +97,30 @@ def load_resource_as_video_frames(
 
 
 def load_image_as_single_frame_video(
-    image_path,
-    image_size,
-    offload_video_to_cpu,
-    img_mean=(0.5, 0.5, 0.5),
-    img_std=(0.5, 0.5, 0.5),
-):
+    image_path: str,
+    image_size: int,
+    offload_video_to_cpu: bool,
+    img_mean: tuple[float, float, float] = (0.5, 0.5, 0.5),
+    img_std: tuple[float, float, float] = (0.5, 0.5, 0.5),
+) -> tuple[torch.Tensor, int, int]:
     """Load an image as a single-frame video."""
     images, image_height, image_width = _load_img_as_tensor(image_path, image_size)
     images = images.unsqueeze(0).half()
 
+    # pyrefly: ignore [bad-assignment]
     img_mean = torch.tensor(img_mean, dtype=torch.float16)[:, None, None]
+    # pyrefly: ignore [bad-assignment]
     img_std = torch.tensor(img_std, dtype=torch.float16)[:, None, None]
     if not offload_video_to_cpu:
         images = images.cuda()
+        # pyrefly: ignore [missing-attribute]
         img_mean = img_mean.cuda()
+        # pyrefly: ignore [missing-attribute]
         img_std = img_std.cuda()
     # normalize by mean and std
+    # pyrefly: ignore [unsupported-operation]
     images -= img_mean
+    # pyrefly: ignore [unsupported-operation]
     images /= img_std
     return images, image_height, image_width
 
@@ -132,6 +144,13 @@ def load_video_frames(
         match = re.match(r"<load-dummy-video-(\d+)>", video_path)
         num_frames = int(match.group(1)) if match else 60
         return load_dummy_video(image_size, offload_video_to_cpu, num_frames=num_frames)
+    elif video_path.startswith("<load-zero-video"):
+        # Check for pattern <load-zero-video-N> where N is an integer
+        match = re.match(r"<load-zero-video-(\d+)>", video_path)
+        num_frames = int(match.group(1)) if match else 60
+        return load_dummy_video(
+            image_size, offload_video_to_cpu, num_frames=num_frames, do_zeros=True
+        )
     elif os.path.isdir(video_path):
         return load_video_frames_from_image_folder(
             image_folder=video_path,
@@ -152,7 +171,23 @@ def load_video_frames(
             video_loader_type=video_loader_type,
         )
     else:
-        raise NotImplementedError("Only video files and image folders are supported")
+        # No recognized extension (e.g., extensionless OIL paths) — attempt video loading.
+        # Only raise if the loader itself fails to decode frames.
+        try:
+            return load_video_frames_from_video_file(
+                video_path=video_path,
+                image_size=image_size,
+                offload_video_to_cpu=offload_video_to_cpu,
+                img_mean=img_mean,
+                img_std=img_std,
+                async_loading_frames=async_loading_frames,
+                video_loader_type=video_loader_type,
+            )
+        except Exception as e:
+            raise NotImplementedError(
+                f"Only video files and image folders are supported; "
+                f"failed to load '{video_path}' as video: {e}"
+            ) from e
 
 
 def load_video_frames_from_image_folder(
@@ -300,38 +335,58 @@ def load_video_frames_from_video_file_using_cv2(
     cap.release()
     pbar.close()
 
+    if len(frames) == 0:
+        raise RuntimeError(
+            f"No frames could be decoded from video: {video_path}. "
+            f"The file may be corrupted, empty, or encoded with an unsupported codec."
+        )
+
     # Convert to tensor
     frames_np = np.stack(frames, axis=0).astype(np.float32)  # (T, H, W, C)
     video_tensor = torch.from_numpy(frames_np).permute(0, 3, 1, 2)  # (T, C, H, W)
 
+    # pyrefly: ignore [bad-assignment]
     img_mean = torch.tensor(img_mean, dtype=torch.float16).view(1, 3, 1, 1)
+    # pyrefly: ignore [bad-assignment]
     img_std = torch.tensor(img_std, dtype=torch.float16).view(1, 3, 1, 1)
     if not offload_video_to_cpu:
         video_tensor = video_tensor.cuda()
+        # pyrefly: ignore [missing-attribute]
         img_mean = img_mean.cuda()
+        # pyrefly: ignore [missing-attribute]
         img_std = img_std.cuda()
     # normalize by mean and std
+    # pyrefly: ignore [unsupported-operation]
     video_tensor -= img_mean
+    # pyrefly: ignore [unsupported-operation]
     video_tensor /= img_std
+    # pyrefly: ignore [bad-return]
     return video_tensor, original_height, original_width
 
 
-def load_dummy_video(image_size, offload_video_to_cpu, num_frames=60):
+def load_dummy_video(image_size, offload_video_to_cpu, num_frames=60, do_zeros=False):
     """
     Load a dummy video with random frames for testing and compilation warmup purposes.
     """
     video_height, video_width = 480, 640  # dummy original video sizes
-    images = torch.randn(num_frames, 3, image_size, image_size, dtype=torch.float16)
+    if not do_zeros:
+        images = torch.randn(num_frames, 3, image_size, image_size, dtype=torch.float16)
+    else:
+        images = torch.zeros(num_frames, 3, image_size, image_size, dtype=torch.float16)
     if not offload_video_to_cpu:
         images = images.cuda()
     return images, video_height, video_width
 
 
-def _load_img_as_tensor(img_path, image_size):
+def _load_img_as_tensor(
+    img_path: str, image_size: int
+) -> tuple[torch.Tensor, int, int]:
     """Load and resize an image and convert it into a PyTorch tensor."""
     img = Image.open(img_path).convert("RGB")
     orig_width, orig_height = img.width, img.height
+    # pyrefly: ignore [bad-argument-type]
     img = TF.resize(img, size=(image_size, image_size))
+    # pyrefly: ignore [bad-argument-type]
     img = TF.to_tensor(img)
     return img, orig_height, orig_width
 
@@ -396,7 +451,7 @@ class AsyncImageFrameLoader:
         self.images[index] = img
         return img
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.images)
 
 
@@ -406,7 +461,14 @@ class TorchCodecDecoder:
     which are not supported by `torchcodec.decoders.SimpleVideoDecoder` yet.
     """
 
-    def __init__(self, source, dimension_order="NCHW", device="cpu", num_threads=1):
+    def __init__(
+        self,
+        source: Union[str, bytes],
+        dimension_order: str = "NCHW",
+        device: str = "cpu",
+        num_threads: int = 1,
+    ) -> None:
+        # pyrefly: ignore [missing-import]
         from torchcodec import _core as core
 
         self._source = source  # hold a reference to the source to prevent it from GC
@@ -436,7 +498,8 @@ class TorchCodecDecoder:
     def __len__(self) -> int:
         return self._num_frames
 
-    def __getitem__(self, key: int):
+    def __getitem__(self, key: int) -> torch.Tensor:
+        # pyrefly: ignore [missing-import]
         from torchcodec import _core as core
 
         if key < 0:
@@ -460,7 +523,7 @@ class FIFOLock:
         self._waiters = queue.Queue()
         self._condition = Condition()
 
-    def acquire(self):
+    def acquire(self) -> None:
         ident = get_ident()
         with self._condition:
             self._waiters.put(ident)
@@ -470,16 +533,21 @@ class FIFOLock:
                 self._condition.wait()
                 # got the lock and it's our turn
 
-    def release(self):
+    def release(self) -> None:
         with self._condition:
             self._lock.release()
             self._waiters.get()
             self._condition.notify_all()
 
-    def __enter__(self):
+    def __enter__(self) -> None:
         self.acquire()
 
-    def __exit__(self, t, v, tb):
+    def __exit__(
+        self,
+        t: Optional[type[BaseException]],
+        v: Optional[BaseException],
+        tb: Optional[types.TracebackType],
+    ) -> None:
         self.release()
 
 
@@ -493,15 +561,15 @@ class AsyncVideoFileLoaderWithTorchCodec:
 
     def __init__(
         self,
-        video_path,
-        image_size,
-        offload_video_to_cpu,
-        img_mean,
-        img_std,
-        gpu_acceleration=True,
-        gpu_device=None,
-        use_rand_seek_in_loading=False,
-    ):
+        video_path: str,
+        image_size: int,
+        offload_video_to_cpu: bool,
+        img_mean: Union[tuple[float, float, float], torch.Tensor],
+        img_std: Union[tuple[float, float, float], torch.Tensor],
+        gpu_acceleration: bool = True,
+        gpu_device: Optional[torch.device] = None,
+        use_rand_seek_in_loading: bool = False,
+    ) -> None:
         # Check and possibly infer the output device (and also get its GPU id when applicable)
         assert gpu_device is None or gpu_device.type == "cuda"
         gpu_id = (
@@ -536,6 +604,7 @@ class AsyncVideoFileLoaderWithTorchCodec:
 
         self.rank = int(os.environ.get("RANK", "0"))
         self.world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        # pyrefly: ignore [bad-argument-type]
         self.async_reader = TorchCodecDecoder(video_path, **decoder_option)
 
         # `num_frames_from_content` is the true number of frames in the video content
@@ -663,7 +732,7 @@ class AsyncVideoFileLoaderWithTorchCodec:
             frame_resized = frame_resized.to(device=self.out_device, non_blocking=True)
         return frame_resized
 
-    def __getitem__(self, index):
+    def __getitem__(self, index: int) -> torch.Tensor:
         if self.exception is not None:
             raise RuntimeError("Failure in frame loading thread") from self.exception
 
@@ -685,10 +754,10 @@ class AsyncVideoFileLoaderWithTorchCodec:
 
         raise RuntimeError(f"Failed to load frame {index} after {max_tries} tries")
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.images)
 
-    def __getstate__(self):
+    def __getstate__(self) -> dict[str, Any]:
         """
         Remove a few attributes during pickling, so that this async video loader can be
         saved and loaded as a part of the model session.
@@ -700,10 +769,14 @@ class AsyncVideoFileLoaderWithTorchCodec:
         # release a few objects that cannot be pickled
         reader = self.async_reader
         if reader is not None:
+            # pyrefly: ignore [bad-assignment]
             reader._source = None
+        # pyrefly: ignore [bad-assignment]
         self.async_reader = None
         self.pbar = None
         self.thread = None
+        # pyrefly: ignore [bad-assignment]
         self.rand_seek_idx_queue = None
+        # pyrefly: ignore [bad-assignment]
         self.torchcodec_access_lock = contextlib.nullcontext()
         return self.__dict__.copy()

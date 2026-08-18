@@ -1,7 +1,8 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
-import copy
+# pyre-unsafe
 
+import copy
 import io
 import json
 import logging
@@ -14,11 +15,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import torch
 import torchvision
-
 # from decord import cpu, VideoReader
 
 from iopath.common.file_io import PathManager
-from PIL import Image as PILImage
 
 from .sam3_image_dataset import Datapoint, Sam3ImageDataset
 
@@ -92,6 +91,7 @@ class VideoGroundingDataset(Sam3ImageDataset):
 
     def _load_datapoint(self, index: int) -> Datapoint:
         id = self.ids[index].item()
+        # pyrefly: ignore [missing-attribute]
         queries, annotations = self.coco.loadQueriesAndAnnotationsFromDatapoint(id)
 
         # we subsample the video frames during training
@@ -115,6 +115,7 @@ class VideoGroundingDataset(Sam3ImageDataset):
                 remap_stage_id=True,
                 reverse_time_axis=reverse_time_axis,
             )
+            # pyrefly: ignore [bad-argument-type]
             pil_images, img_metadata = self._load_images(id, kept_img_ids)
             if reverse_time_axis:
                 # reverse the temporal ordering of the images and their metadata
@@ -122,6 +123,7 @@ class VideoGroundingDataset(Sam3ImageDataset):
                 pil_images = pil_images[::-1]
                 img_metadata = img_metadata[::-1]
         else:
+            # pyrefly: ignore [bad-argument-type]
             pil_images, img_metadata = self._load_images(id)
 
         # check that all the images have the same image size (they are expected
@@ -162,7 +164,7 @@ class VideoGroundingDataset(Sam3ImageDataset):
     def _sample_stage_ids(self, queries, num_stages_sample, stage_stride):
         """Sample a subset of stage ids from all queries."""
         # Later we can perhaps turn it into a Sampler class to be more flexible.
-        all_stage_ids = sorted(set(q["query_processing_order"] for q in queries))
+        all_stage_ids = sorted({q["query_processing_order"] for q in queries})
         num_stages_total = len(all_stage_ids)
         if num_stages_total < num_stages_sample:
             raise ValueError("Not enough stages to sample")
@@ -218,9 +220,9 @@ class VideoGroundingDataset(Sam3ImageDataset):
             for query in filtered_queries:
                 ptr_x_is_empty = query["ptr_x_query_id"] in [None, -1]
                 ptr_y_is_empty = query["ptr_y_query_id"] in [None, -1]
-                assert (
-                    ptr_x_is_empty and ptr_y_is_empty
-                ), "Remapping stage ids is not supported for queries with non-empty ptr_x or ptr_y pointers"
+                assert ptr_x_is_empty and ptr_y_is_empty, (
+                    "Remapping stage ids is not supported for queries with non-empty ptr_x or ptr_y pointers"
+                )
                 query["query_processing_order"] = stage_id_old2new[
                     query["query_processing_order"]
                 ]
@@ -262,7 +264,9 @@ class VideoGroundingDataset(Sam3ImageDataset):
             assert query.query_processing_order == 0
             # check and make sure that a query doesn't contain pointers or references
             # to other queries (that cannot be tiled)
+            # pyrefly: ignore [missing-attribute]
             assert query.ptr_x is None and query.ptr_y is None
+            # pyrefly: ignore [missing-attribute]
             assert query.ptr_mem is None
             # assert query.wkdata_qid is None
             # assert query.other_positive_qids is None
@@ -295,6 +299,7 @@ class VideoGroundingDataset(Sam3ImageDataset):
             images=tiled_images,
             raw_images=tiled_raw_images,
             find_queries=tiled_find_queries,
+            # pyrefly: ignore [unexpected-keyword]
             get_queries=tiled_get_queries,
         )
 
@@ -323,5 +328,6 @@ class VideoGroundingDataset(Sam3ImageDataset):
             images=datapoint.images,
             raw_images=datapoint.raw_images,
             find_queries=sampled_find_queries,
+            # pyrefly: ignore [missing-attribute, unexpected-keyword]
             get_queries=datapoint.get_queries,
         )

@@ -1,24 +1,22 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import os
 from copy import deepcopy
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-
 from sam3.model.model_misc import SAM3Output
-
 from sam3.model.sam1_task_predictor import SAM3InteractiveImagePredictor
 from sam3.model.vl_combiner import SAM3VLBackbone
 from sam3.perflib.nms import nms_masks
-
 from sam3.train.data.collator import BatchedDatapoint
 
 from .act_ckpt_utils import activation_ckpt_wrapper
-
 from .box_ops import box_cxcywh_to_xyxy
-
+from .data_misc import FindStage
 from .geometry_encoders import Prompt
 from .model_misc import inverse_sigmoid
 
@@ -57,6 +55,7 @@ class Sam3Image(torch.nn.Module):
         detach_presence_in_joint_score: bool = False,  # only relevant if using presence token/score
         separate_scorer_for_instance: bool = False,
         num_interactive_steps_val: int = 0,
+        # pyrefly: ignore [bad-function-definition]
         inst_interactive_predictor: SAM3InteractiveImagePredictor = None,
         **kwargs,
     ):
@@ -213,12 +212,12 @@ class Sam3Image(torch.nn.Module):
 
     def _run_encoder(
         self,
-        backbone_out,
-        find_input,
-        prompt,
-        prompt_mask,
+        backbone_out: Dict,
+        find_input: FindStage,
+        prompt: torch.Tensor,
+        prompt_mask: torch.Tensor,
         encoder_extra_kwargs: Optional[Dict] = None,
-    ):
+    ) -> Tuple[Dict, Dict, Tuple]:
         feat_tuple = self._get_img_feats(backbone_out, find_input.img_ids)
         backbone_out, img_feats, img_pos_embeds, vis_feat_sizes = feat_tuple
 
@@ -445,6 +444,7 @@ class Sam3Image(torch.nn.Module):
         find_input,
         find_target,
         geometric_prompt: Prompt,
+        **kwargs,
     ):
         with torch.profiler.record_function("SAM3Image._encode_prompt"):
             prompt, prompt_mask, backbone_out = self._encode_prompt(
@@ -477,10 +477,14 @@ class Sam3Image(torch.nn.Module):
 
         # Run segmentation heads
         with torch.profiler.record_function("SAM3Image._run_segmentation_heads"):
+            # Apply id_mapping to img_ids if backbone features were recomputed
+            seg_img_ids = find_input.img_ids
+            if "id_mapping" in backbone_out and backbone_out["id_mapping"] is not None:
+                seg_img_ids = backbone_out["id_mapping"][seg_img_ids]
             self._run_segmentation_heads(
                 out=out,
                 backbone_out=backbone_out,
-                img_ids=find_input.img_ids,
+                img_ids=seg_img_ids,
                 vis_feat_sizes=encoder_out["vis_feat_sizes"],
                 encoder_hidden_states=out["encoder_hidden_states"],
                 prompt=prompt,
@@ -519,6 +523,29 @@ class Sam3Image(torch.nn.Module):
 
         return out
 
+    def _get_geo_prompt_from_find_input(self, find_input: FindStage):
+        """Construct an initial geometric prompt from the find input."""
+        point_embeddings, point_mask, point_labels = None, None, None
+        if find_input.input_points_before_embed is not None:
+            # Point embeddings are batch first, switch to seq first
+            # pyrefly: ignore [missing-attribute]
+            point_embeddings = find_input.input_points_before_embed.transpose(0, 1)
+
+            # they are stored as (x,y,label), so we unpack
+            point_labels = point_embeddings[..., -1]
+            point_embeddings = point_embeddings[..., :-1]
+            point_mask = find_input.input_points_mask
+
+        geometric_prompt = Prompt(
+            box_embeddings=find_input.input_boxes_before_embed,
+            box_mask=find_input.input_boxes_mask,
+            box_labels=find_input.input_boxes_label,
+            point_embeddings=point_embeddings,
+            point_mask=point_mask,
+            point_labels=point_labels,
+        )
+        return geometric_prompt
+
     def _get_dummy_prompt(self, num_prompts=1):
         device = self.device
         geometric_prompt = Prompt(
@@ -544,6 +571,7 @@ class Sam3Image(torch.nn.Module):
         find_input = input.find_inputs[0]
         find_target = input.find_targets[0]
 
+        # pyrefly: ignore [missing-attribute]
         if find_input.input_points is not None and find_input.input_points.numel() > 0:
             print("Warning: Point prompts are ignored in PCS.")
 
@@ -559,6 +587,7 @@ class Sam3Image(torch.nn.Module):
         for cur_step in range(num_interactive_steps + 1):
             if cur_step > 0:
                 # We sample interactive geometric prompts (boxes, points)
+                # pyrefly: ignore [missing-attribute]
                 geometric_prompt, _ = self.interactive_prompt_sampler.sample(
                     geo_prompt=geometric_prompt,
                     find_target=find_target,
@@ -659,9 +688,9 @@ class Sam3Image(torch.nn.Module):
             inference_state["original_heights"],
             inference_state["original_widths"],
         )
-        assert (
-            batch_size == len(orig_heights) == len(orig_widths)
-        ), f"Batch size mismatch in predict_inst_batch. Got {batch_size}, {len(orig_heights)}, {len(orig_widths)}"
+        assert batch_size == len(orig_heights) == len(orig_widths), (
+            f"Batch size mismatch in predict_inst_batch. Got {batch_size}, {len(orig_heights)}, {len(orig_widths)}"
+        )
         feats = [
             feat.permute(1, 2, 0).view(batch_size, -1, *feat_size)
             for feat, feat_size in zip(
@@ -700,22 +729,22 @@ class Sam3ImageOnVideoMultiGPU(Sam3Image):
 
     def forward_video_grounding_multigpu(
         self,
-        backbone_out,
-        find_inputs,
+        backbone_out: Dict,
+        find_inputs: List,
         geometric_prompt: Prompt,
-        frame_idx,
-        num_frames,
+        frame_idx: int,
+        num_frames: int,
         # `multigpu_buffer` is a dict to cache detector's outputs in a chunk between different calls
-        multigpu_buffer,
-        track_in_reverse=False,
+        multigpu_buffer: Dict,
+        track_in_reverse: bool = False,
         # whether to also return the SAM2 backbone features
-        return_sam2_backbone_feats=False,
+        return_sam2_backbone_feats: bool = False,
         # whether to perform NMS and suppress the scores of those detections removed by NMS
-        run_nms=False,
-        nms_prob_thresh=None,
-        nms_iou_thresh=None,
+        run_nms: bool = False,
+        nms_prob_thresh: Optional[float] = None,
+        nms_iou_thresh: Optional[float] = None,
         **kwargs,
-    ):
+    ) -> Tuple[Dict, Dict]:
         """
         Compute the detector's detection outputs in a distributed manner, where all GPUs process
         a chunk of frames (equal to the number of GPUs) at once and store them in cache.
@@ -759,6 +788,7 @@ class Sam3ImageOnVideoMultiGPU(Sam3Image):
         else:
             frame_idx_prev_b = frame_idx_prev_e = None
         if frame_idx_prev_b is not None:
+            # pyrefly: ignore [bad-argument-type]
             for frame_idx_rm in range(frame_idx_prev_b, frame_idx_prev_e):
                 multigpu_buffer.pop(frame_idx_rm, None)
 
@@ -863,9 +893,13 @@ class Sam3ImageOnVideoMultiGPU(Sam3Image):
             }
             if self.gather_backbone_out:
                 # also add gathered SAM 2 backbone features to frame_buffer
+                # pyrefly: ignore [unbound-name]
                 frame_buffer["tracker_backbone_fpn_0"] = (fpn0[rank], fpn_handle0)
+                # pyrefly: ignore [unbound-name]
                 frame_buffer["tracker_backbone_fpn_1"] = (fpn1[rank], fpn_handle1)
+                # pyrefly: ignore [unbound-name]
                 frame_buffer["tracker_backbone_fpn_2"] = (fpn2[rank], fpn_handle2)
+                # pyrefly: ignore [unbound-name]
                 frame_buffer["tracker_backbone_pos_enc"] = (vision_pos_enc, None)
 
             multigpu_buffer[frame_idx_to_save] = frame_buffer

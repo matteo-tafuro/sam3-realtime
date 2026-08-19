@@ -1,12 +1,12 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
+
+# pyre-unsafe
 from typing import Dict, List
 
 import numpy as np
 import PIL
 import torch
-
 from sam3.model import box_ops
-
 from sam3.model.data_misc import FindStage, interpolate
 from torchvision.transforms import v2
 
@@ -81,9 +81,9 @@ class Sam3Processor:
         if not isinstance(images, list):
             raise ValueError("Images must be a list of PIL images or tensors")
         assert len(images) > 0, "Images list must not be empty"
-        assert isinstance(
-            images[0], PIL.Image.Image
-        ), "Images must be a list of PIL images"
+        assert isinstance(images[0], PIL.Image.Image), (
+            "Images must be a list of PIL images"
+        )
 
         state["original_heights"] = [image.height for image in images]
         state["original_widths"] = [image.width for image in images]
@@ -92,6 +92,7 @@ class Sam3Processor:
             self.transform(v2.functional.to_image(image).to(self.device))
             for image in images
         ]
+        # pyrefly: ignore [bad-argument-type, bad-assignment]
         images = torch.stack(images, dim=0)
         state["backbone_out"] = self.model.backbone.forward_image(images)
         inst_interactivity_en = self.model.inst_interactive_predictor is not None

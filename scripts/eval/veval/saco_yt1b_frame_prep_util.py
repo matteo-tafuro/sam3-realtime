@@ -1,10 +1,14 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
+
+# pyre-unsafe
 import argparse
 import logging
 import os
 import subprocess
 
 import pandas as pd
+
+# pyrefly: ignore [missing-source-for-stubs]
 import yt_dlp
 
 logger = logging.getLogger(__name__)
@@ -56,9 +60,9 @@ class YtVideoPrep:
         df = self.yt1b_start_end_time_df[
             self.yt1b_start_end_time_df.saco_yt1b_id == self.saco_yt1b_id
         ]
-        assert (
-            len(df) == 1
-        ), f"Expected exactly 1 row for saco_yt1b_id: {self.saco_yt1b_id}, found {len(df)}"
+        assert len(df) == 1, (
+            f"Expected exactly 1 row for saco_yt1b_id: {self.saco_yt1b_id}, found {len(df)}"
+        )
         id_and_frame_map_row = df.iloc[0]
 
         yt_video_id = (
@@ -80,9 +84,9 @@ class YtVideoPrep:
     def download_youtube_video(self):
         video_url = f"https://youtube.com/watch?v={self.yt_video_id}"
 
-        assert os.path.exists(
-            self.cookies_file
-        ), f"Cookies file '{self.cookies_file}' not found. Must have it to download videos."
+        assert os.path.exists(self.cookies_file), (
+            f"Cookies file '{self.cookies_file}' not found. Must have it to download videos."
+        )
 
         outtmpl = self.raw_video_path
 

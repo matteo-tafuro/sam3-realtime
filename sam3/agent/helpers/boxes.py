@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import math
 from enum import IntEnum, unique
 from typing import List, Tuple, Union
@@ -71,6 +73,8 @@ class BoxMode(IntEnum):
             if is_numpy:
                 arr = torch.from_numpy(np.asarray(box)).clone()
             else:
+                # pyre-fixme[16]: Item `List` of `List[float] | ndarray | Tensor |
+                #  tuple[float, ...]` has no attribute `clone`.
                 arr = box.clone()
 
         assert to_mode not in [
@@ -82,9 +86,9 @@ class BoxMode(IntEnum):
         ], "Relative mode not yet supported!"
 
         if from_mode == BoxMode.XYWHA_ABS and to_mode == BoxMode.XYXY_ABS:
-            assert (
-                arr.shape[-1] == 5
-            ), "The last dimension of input shape must be 5 for XYWHA format"
+            assert arr.shape[-1] == 5, (
+                "The last dimension of input shape must be 5 for XYWHA format"
+            )
             original_dtype = arr.dtype
             arr = arr.double()
 
@@ -111,6 +115,7 @@ class BoxMode(IntEnum):
             arr[:, 0] += arr[:, 2] / 2.0
             arr[:, 1] += arr[:, 3] / 2.0
             angles = torch.zeros((arr.shape[0], 1), dtype=arr.dtype)
+            # pyre-fixme[28]: Unexpected keyword argument `axis`.
             arr = torch.cat((arr, angles), axis=1).to(dtype=original_dtype)
         else:
             if to_mode == BoxMode.XYXY_ABS and from_mode == BoxMode.XYWH_ABS:
@@ -127,6 +132,7 @@ class BoxMode(IntEnum):
                 )
 
         if single_box:
+            # pyrefly: ignore [bad-argument-type]
             return original_type(arr.flatten().tolist())
         if is_numpy:
             return arr.numpy()
@@ -242,9 +248,9 @@ class Boxes:
         if isinstance(item, int):
             return Boxes(self.tensor[item].view(1, -1))
         b = self.tensor[item]
-        assert (
-            b.dim() == 2
-        ), "Indexing on Boxes with {} failed to return a matrix!".format(item)
+        assert b.dim() == 2, (
+            "Indexing on Boxes with {} failed to return a matrix!".format(item)
+        )
         return Boxes(b)
 
     def __len__(self) -> int:
@@ -334,9 +340,17 @@ def pairwise_intersection(boxes1: Boxes, boxes2: Boxes) -> torch.Tensor:
     Returns:
         Tensor: intersection, sized [N,M].
     """
+    # pyre-fixme[9]: boxes1 has type `Boxes`; used as `Tensor`.
+    # pyre-fixme[9]: boxes2 has type `Boxes`; used as `Tensor`.
     boxes1, boxes2 = boxes1.tensor, boxes2.tensor
+    # pyre-fixme[6]: For 1st argument expected `Tensor` but got `Boxes`.
+    # pyre-fixme[6]: For 2nd argument expected `Tensor` but got `Boxes`.
     width_height = torch.min(boxes1[:, None, 2:], boxes2[:, 2:]) - torch.max(
-        boxes1[:, None, :2], boxes2[:, :2]
+        # pyre-fixme[6]: For 1st argument expected `Tensor` but got `Boxes`.
+        # pyre-fixme[6]: For 2nd argument expected `Tensor` but got `Boxes`.
+        boxes1[:, None, :2],
+        # pyre-fixme[6]: For 2nd argument expected `Tensor` but got `Boxes`.
+        boxes2[:, :2],
     )  # [N,M,2]
 
     width_height.clamp_(min=0)  # [N,M,2]
@@ -423,7 +437,7 @@ def matched_pairwise_iou(boxes1: Boxes, boxes2: Boxes) -> torch.Tensor:
         Tensor: iou, sized [N].
     """
     assert len(boxes1) == len(boxes2), (
-        "boxlists should have the same" "number of entries, got {}, {}".format(
+        "boxlists should have the same number of entries, got {}, {}".format(
             len(boxes1), len(boxes2)
         )
     )

@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 """
 Text Tokenizer.
 
@@ -135,6 +137,7 @@ class SimpleTokenizer(object):
     ):
         self.byte_encoder = bytes_to_unicode()
         self.byte_decoder = {v: k for k, v in self.byte_encoder.items()}
+        # pyrefly: ignore [no-matching-overload]
         with g_pathmgr.open(bpe_path, "rb") as fh:
             bpe_bytes = io.BytesIO(fh.read())
             merges = gzip.open(bpe_bytes).read().decode("utf-8").split("\n")
@@ -250,4 +253,5 @@ class SimpleTokenizer(object):
                 tokens = tokens[:context_length]  # Truncate
                 tokens[-1] = self.eot_token_id
             result[i, : len(tokens)] = torch.tensor(tokens)
+        # pyrefly: ignore [bad-return]
         return result

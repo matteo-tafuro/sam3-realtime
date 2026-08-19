@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import logging
 import math
 import os
@@ -9,7 +11,6 @@ from datetime import timedelta
 from typing import Optional
 
 import hydra
-
 import numpy as np
 import omegaconf
 import torch
@@ -79,12 +80,12 @@ def get_machine_local_and_dist_rank():
     """
     Get the distributed and local rank of the current gpu.
     """
-    local_rank = int(os.environ.get("LOCAL_RANK", None))
-    distributed_rank = int(os.environ.get("RANK", None))
-    assert (
-        local_rank is not None and distributed_rank is not None
-    ), "Please the set the RANK and LOCAL_RANK environment variables."
-    return local_rank, distributed_rank
+    local_rank = os.environ.get("LOCAL_RANK", None)
+    distributed_rank = os.environ.get("RANK", None)
+    assert local_rank is not None and distributed_rank is not None, (
+        "Please set the RANK and LOCAL_RANK environment variables."
+    )
+    return int(local_rank), int(distributed_rank)
 
 
 def print_cfg(cfg):

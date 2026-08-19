@@ -43,6 +43,7 @@ class Sam3StreamPredictor:
         apply_temporal_disambiguation: bool = True,
         device: Optional[str] = None,
         compile: bool = False,
+        fast_preprocess: bool = False,
     ) -> None:
 
         from sam3.model_builder import build_sam3_stream_model
@@ -61,6 +62,7 @@ class Sam3StreamPredictor:
                 apply_temporal_disambiguation=apply_temporal_disambiguation,
                 device=device,
                 compile=compile,
+                fast_preprocess=fast_preprocess,
             )
             .to(device=device)
             .eval()

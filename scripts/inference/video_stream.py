@@ -115,6 +115,22 @@ if __name__ == "__main__":
     )
     parser.set_defaults(save_video=True)
 
+    # === Performance options ===
+    parser.add_argument(
+        "--fast_preprocess",
+        action="store_true",
+        help="Resize/normalize frames on the GPU instead of via PIL on the CPU "
+        "(~4x faster ingest). Note: GPU resampling differs slightly from PIL, so "
+        "outputs may change marginally.",
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="torch.compile the model (~10-15%% faster steady-state). Incurs a "
+        "one-time compilation cost (~1-2 min) that is front-loaded via a warm-up "
+        "before streaming starts.",
+    )
+
     # ===============================
 
     args = parser.parse_args()
@@ -146,7 +162,16 @@ if __name__ == "__main__":
 
     # Initialize predictor (single-GPU streaming)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    predictor = build_sam3_stream_predictor(device=device)
+    predictor = build_sam3_stream_predictor(
+        device=device, fast_preprocess=args.fast_preprocess, compile=args.compile
+    )
+
+    # Front-load torch.compile so the compilation cost is not paid on the first
+    # streamed frame (which would otherwise stall the live stream for ~1-2 min).
+    if args.compile:
+        print("Warming up torch.compile (one-time, may take 1-2 min)...")
+        predictor.handle_request({"type": "warm_up_compilation"})
+        print("Warm-up complete.")
 
     resp = predictor.handle_request({"type": "start_session"})
     session_id = resp["session_id"]
@@ -186,9 +211,12 @@ if __name__ == "__main__":
                     {"type": "add_frame", "session_id": session_id, "frame": frame_rgb}
                 )
 
-                # Add text prompt only on first frame
+                # Add text prompt only on first frame. Adding a prompt already runs
+                # inference for that frame and returns its outputs, so we reuse them
+                # instead of running inference a second time on the same frame.
+                prompt_outputs = None
                 if frame_idx == 0:
-                    predictor.handle_request(
+                    presp = predictor.handle_request(
                         {
                             "type": "add_prompt",
                             "session_id": session_id,
@@ -196,10 +224,11 @@ if __name__ == "__main__":
                             "text": args.text_prompt,
                         }
                     )
+                    prompt_outputs = presp.get("outputs")
 
                 # # You can potentially add more prompts on later frames too
                 # if frame_idx == 30:
-                #     predictor.handle_request(
+                #     presp = predictor.handle_request(
                 #         {
                 #             "type": "add_prompt",
                 #             "session_id": session_id,
@@ -207,16 +236,21 @@ if __name__ == "__main__":
                 #             "text": "bottle",
                 #         }
                 #     )
+                #     prompt_outputs = presp.get("outputs")
 
-                # Run per-frame inference
-                resp = predictor.handle_request(
-                    {
-                        "type": "run_inference",
-                        "session_id": session_id,
-                        "frame_index": frame_idx,
-                    }
-                )
-                outputs = resp.get("outputs")
+                # Run per-frame inference (skipped if a prompt already produced outputs
+                # for this frame, avoiding a redundant second forward pass).
+                if prompt_outputs is not None:
+                    outputs = prompt_outputs
+                else:
+                    resp = predictor.handle_request(
+                        {
+                            "type": "run_inference",
+                            "session_id": session_id,
+                            "frame_index": frame_idx,
+                        }
+                    )
+                    outputs = resp.get("outputs")
                 if outputs is not None:
                     overlay_rgb = render_masklet_frame(
                         frame_rgb, outputs, frame_idx=frame_idx, alpha=0.5

@@ -1,19 +1,18 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 # All rights reserved.
 
+# pyre-unsafe
+
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
 import logging
-
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
-
 import torch.nn as nn
 from PIL.Image import Image
-
 from sam3.model.sam3_tracker_base import Sam3TrackerBase
 from sam3.model.utils.sam1_utils import SAM2Transforms
 
@@ -95,9 +94,9 @@ class SAM3InteractiveImagePredictor(nn.Module):
         input_image = self._transforms(image)
         input_image = input_image[None, ...].to(self.device)
 
-        assert (
-            len(input_image.shape) == 4 and input_image.shape[1] == 3
-        ), f"input_image must be of size 1x3xHxW, got {input_image.shape}"
+        assert len(input_image.shape) == 4 and input_image.shape[1] == 3, (
+            f"input_image must be of size 1x3xHxW, got {input_image.shape}"
+        )
         logging.info("Computing image embeddings for the provided image...")
         backbone_out = self.model.forward_image(input_image)
         (
@@ -134,17 +133,17 @@ class SAM3InteractiveImagePredictor(nn.Module):
         assert isinstance(image_list, list)
         self._orig_hw = []
         for image in image_list:
-            assert isinstance(
-                image, np.ndarray
-            ), "Images are expected to be an np.ndarray in RGB format, and of shape  HWC"
+            assert isinstance(image, np.ndarray), (
+                "Images are expected to be an np.ndarray in RGB format, and of shape  HWC"
+            )
             self._orig_hw.append(image.shape[:2])
         # Transform the image to the form expected by the model
         img_batch = self._transforms.forward_batch(image_list)
         img_batch = img_batch.to(self.device)
         batch_size = img_batch.shape[0]
-        assert (
-            len(img_batch.shape) == 4 and img_batch.shape[1] == 3
-        ), f"img_batch must be of size Bx3xHxW, got {img_batch.shape}"
+        assert len(img_batch.shape) == 4 and img_batch.shape[1] == 3, (
+            f"img_batch must be of size Bx3xHxW, got {img_batch.shape}"
+        )
         logging.info("Computing image embeddings for the provided images...")
         backbone_out = self.model.forward_image(img_batch)
         (
@@ -167,9 +166,13 @@ class SAM3InteractiveImagePredictor(nn.Module):
 
     def predict_batch(
         self,
+        # pyre-fixme[9]: point_coords_batch has type `List[ndarray]`; used as `None`.
         point_coords_batch: List[np.ndarray] = None,
+        # pyre-fixme[9]: point_labels_batch has type `List[ndarray]`; used as `None`.
         point_labels_batch: List[np.ndarray] = None,
+        # pyre-fixme[9]: box_batch has type `List[ndarray]`; used as `None`.
         box_batch: List[np.ndarray] = None,
+        # pyre-fixme[9]: mask_input_batch has type `List[ndarray]`; used as `None`.
         mask_input_batch: List[np.ndarray] = None,
         multimask_output: bool = True,
         return_logits: bool = False,
@@ -183,6 +186,7 @@ class SAM3InteractiveImagePredictor(nn.Module):
             raise RuntimeError(
                 "An image must be set with .set_image_batch(...) before mask prediction."
             )
+        # pyrefly: ignore [unsupported-operation]
         num_images = len(self._features["image_embed"])
         all_masks = []
         all_ious = []
@@ -300,9 +304,9 @@ class SAM3InteractiveImagePredictor(nn.Module):
     ):
         unnorm_coords, labels, unnorm_box, mask_input = None, None, None, None
         if point_coords is not None:
-            assert (
-                point_labels is not None
-            ), "point_labels must be supplied if point_coords is supplied."
+            assert point_labels is not None, (
+                "point_labels must be supplied if point_coords is supplied."
+            )
             point_coords = torch.as_tensor(
                 point_coords, dtype=torch.float, device=self.device
             )
@@ -390,6 +394,8 @@ class SAM3InteractiveImagePredictor(nn.Module):
             # boxes are added at the beginning) to sam_prompt_encoder
             if concat_points is not None:
                 concat_coords = torch.cat([box_coords, concat_points[0]], dim=1)
+                # pyre-fixme[6]: For 1st argument expected `Union[List[Tensor],
+                #  tuple[Tensor, ...]]` but got `List[Optional[Tensor]]`.
                 concat_labels = torch.cat([box_labels, concat_points[1]], dim=1)
                 concat_points = (concat_coords, concat_labels)
             else:
@@ -407,9 +413,11 @@ class SAM3InteractiveImagePredictor(nn.Module):
         )  # multi object prediction
         high_res_features = [
             feat_level[img_idx].unsqueeze(0)
+            # pyrefly: ignore [unsupported-operation]
             for feat_level in self._features["high_res_feats"]
         ]
         low_res_masks, iou_predictions, _, _ = self.model.sam_mask_decoder(
+            # pyrefly: ignore [unsupported-operation]
             image_embeddings=self._features["image_embed"][img_idx].unsqueeze(0),
             image_pe=self.model.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
@@ -421,7 +429,10 @@ class SAM3InteractiveImagePredictor(nn.Module):
 
         # Upscale the masks to the original image resolution
         masks = self._transforms.postprocess_masks(
-            low_res_masks, self._orig_hw[img_idx]
+            # pyrefly: ignore [unsupported-operation]
+            low_res_masks,
+            # pyrefly: ignore [unsupported-operation]
+            self._orig_hw[img_idx],
         )
         low_res_masks = torch.clamp(low_res_masks, -32.0, 32.0)
         if not return_logits:
@@ -439,9 +450,9 @@ class SAM3InteractiveImagePredictor(nn.Module):
             raise RuntimeError(
                 "An image must be set with .set_image(...) to generate an embedding."
             )
-        assert (
-            self._features is not None
-        ), "Features must exist if an image has been set."
+        assert self._features is not None, (
+            "Features must exist if an image has been set."
+        )
         return self._features["image_embed"]
 
     @property

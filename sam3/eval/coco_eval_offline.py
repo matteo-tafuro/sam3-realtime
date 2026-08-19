@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 """
 This evaluator is meant for regular COCO mAP evaluation, for example on the COCO val set.
 
@@ -17,6 +19,7 @@ from pycocotools.cocoeval import COCOeval
 from sam3.train.utils.distributed import is_main_process
 
 try:
+    # pyrefly: ignore [missing-import]
     from tidecv import datasets, TIDE
 
     HAS_TIDE = True

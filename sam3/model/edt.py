@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 """Triton kernel for euclidean distance transform (EDT)"""
 
 import torch
@@ -151,6 +153,7 @@ def edt_triton(data: torch.Tensor):
         parabola_inter,
         H,
         W,
+        # pyrefly: ignore [bad-argument-type]
         horizontal=True,
     )
 
@@ -167,6 +170,7 @@ def edt_triton(data: torch.Tensor):
         parabola_inter,
         H,
         W,
+        # pyrefly: ignore [bad-argument-type]
         horizontal=False,
     )
     # don't forget to take sqrt at the end

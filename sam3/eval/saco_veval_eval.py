@@ -1,4 +1,6 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
+
+# pyre-unsafe
 import argparse
 import json
 import os
@@ -36,7 +38,9 @@ class VEvalEvaluator:
         video_np_results = defaultdict(dict)
         for evaluator in self.evaluators:
             d_res, v_np_res = evaluator.evaluate(pred_file)
+            # pyrefly: ignore [no-matching-overload]
             dataset_results.update(d_res)
+            # pyrefly: ignore [missing-attribute]
             for (video_id, category_id), res in v_np_res.items():
                 video_np_results[(video_id, category_id)].update(res)
 

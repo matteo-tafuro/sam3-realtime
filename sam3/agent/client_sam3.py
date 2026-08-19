@@ -1,11 +1,12 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import json
 import os
 
 import torch
 from PIL import Image
-
 from sam3.model.box_ops import box_xyxy_to_xywh
 from sam3.train.masks_ops import rle_encode
 
@@ -130,6 +131,7 @@ def call_sam_service(
         print("🔍 Rendering visualizations on the image ...")
         viz_image = visualize(serialized_response)
         os.makedirs(os.path.dirname(output_image_path), exist_ok=True)
+        # pyrefly: ignore [missing-attribute]
         viz_image.save(output_image_path)
         print("✅ Saved visualization at:", output_image_path)
     except Exception as e:

@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 """Postprocessors class to transform MDETR output according to the downstream task"""
 
 import dataclasses
@@ -81,11 +83,12 @@ class PostProcessImage(nn.Module):
             ret_tensordict: Experimental argument. If true, return a tensordict.TensorDict instead of a list of dictionaries for easier manipulation.
         """
         if ret_tensordict:
-            assert (
-                consistent is True
-            ), "We don't support returning TensorDict if the outputs have different shapes"  # NOTE: It's possible but we don't support it.
+            assert consistent is True, (
+                "We don't support returning TensorDict if the outputs have different shapes"
+            )  # NOTE: It's possible but we don't support it.
             assert self.detection_threshold <= 0.0, "TODO: implement?"
             try:
+                # pyrefly: ignore [missing-import]
                 from tensordict import TensorDict
             except ImportError:
                 logging.info(
@@ -116,7 +119,9 @@ class PostProcessImage(nn.Module):
 
         if boxes is None:
             assert out_masks is not None
-            assert not ret_tensordict, "We don't support returning TensorDict if the output does not contain boxes"
+            assert not ret_tensordict, (
+                "We don't support returning TensorDict if the output does not contain boxes"
+            )
             B = len(out_masks)
             boxes = [None] * B
             scores = [None] * B
@@ -134,6 +139,7 @@ class PostProcessImage(nn.Module):
                 results.update(masks=out_masks)
 
         if ret_tensordict:
+            # pyrefly: ignore [unbound-name]
             results = TensorDict(results).auto_batch_size_()
             if self.to_cpu:
                 results = results.cpu()
@@ -261,12 +267,16 @@ class PostProcessImage(nn.Module):
             img_size_for_boxes = (
                 meta.original_size
                 if self.use_original_sizes_box
-                else torch.ones_like(meta.original_size)
+                else torch.ones_like(
+                    meta.original_size  # pyrefly: ignore [bad-argument-type]
+                )  # pyrefly: ignore [bad-argument-type]
             )
             img_size_for_masks = (
                 meta.original_size
                 if self.use_original_sizes_mask
-                else torch.ones_like(meta.original_size)
+                else torch.ones_like(
+                    meta.original_size  # pyrefly: ignore [bad-argument-type]
+                )  # pyrefly: ignore [bad-argument-type]
             )
             detection_results = self(
                 outputs,
@@ -373,6 +383,7 @@ class PostProcessAPIVideo(PostProcessImage):
 
         # Import tensordict here to avoid global dependency.
         try:
+            # pyrefly: ignore [missing-import]
             from tensordict import TensorDict
         except ImportError as e:
             logging.error(
@@ -411,14 +422,15 @@ class PostProcessAPIVideo(PostProcessImage):
             meta_td = TensorDict(
                 dataclasses.asdict(meta)
             ).auto_batch_size_()  # Shape is [P,...]
+            # pyrefly: ignore [missing-attribute]
             unique_vid_id = meta.original_image_id.unique()
             assert unique_vid_id.size(0) == 1
             if video_id == -1:
                 video_id = unique_vid_id.item()
             else:
-                assert (
-                    video_id == unique_vid_id.item()
-                ), "We can only postprocess one video per datapoint"
+                assert video_id == unique_vid_id.item(), (
+                    "We can only postprocess one video per datapoint"
+                )
             # keeping track of which objects appear in the current frame
             obj_ids_per_frame = frame_outs["pred_object_ids"]
             assert obj_ids_per_frame.size(-1) == frame_outs["pred_logits"].size(-2)
@@ -461,7 +473,7 @@ class PostProcessAPIVideo(PostProcessImage):
                 tracked_objs_outs_td.unsqueeze(1),
                 (
                     meta_td["original_size"]
-                    if self.use_original_sizes
+                    if self.use_original_sizes  # pyrefly: ignore [not-callable]
                     else torch.ones_like(meta_td["original_size"])
                 ),
                 forced_labels=(
@@ -487,6 +499,7 @@ class PostProcessAPIVideo(PostProcessImage):
             logging.debug(f"Video {video_id} has no predictions")
             return {video_id: []}
 
+        # pyrefly: ignore [bad-assignment]
         vid_preds_packed = torch.cat(vid_preds_packed, dim=0)
         ############### Construct a padded representation of the predictions ###############
         num_preds = len(tracked_objects_packed_idx)
@@ -498,6 +511,7 @@ class PostProcessAPIVideo(PostProcessImage):
                 k: torch.zeros(
                     num_preds, num_frames, *v.shape[1:], device=v.device, dtype=v.dtype
                 )
+                # pyrefly: ignore [missing-attribute]
                 for k, v in vid_preds_packed.items()
             },
             batch_size=[
@@ -517,10 +531,12 @@ class PostProcessAPIVideo(PostProcessImage):
         for o_idx, oid in enumerate(tracked_objects_packed_idx):
             oid2packed_idx = tracked_objects_packed_idx[oid]
             oid2padded_idx = tracked_objects_frame_idx[oid]
+            # pyrefly: ignore [bad-index]
             obj_packed_results = vid_preds_packed[oid2packed_idx]
             padded_frames_results[o_idx][oid2padded_idx] = obj_packed_results
             if self.convert_mask_to_rle_for_video:
                 for packed_idx, padded_idx in zip(oid2packed_idx, oid2padded_idx):
+                    # pyrefly: ignore [unbound-name]
                     vid_masklets_rle_padded[o_idx][padded_idx] = (
                         vid_masklets_rle_packed[packed_idx]
                     )
@@ -535,6 +551,7 @@ class PostProcessAPIVideo(PostProcessImage):
         results["scores"] = torch.stack(tracklet_scores, dim=0)
         results["labels"] = torch.stack(tracklet_labels, dim=0)
         if self.convert_mask_to_rle_for_video:
+            # pyrefly: ignore [unbound-name]
             results["masks_rle"] = vid_masklets_rle_padded
         # we keep the frame-level scores since it's needed by some evaluation scripts
         results["per_frame_scores"] = padded_frames_results["scores"]
@@ -555,11 +572,14 @@ class PostProcessTracking(PostProcessImage):
         super().__init__(max_dets_per_img=max_dets_per_img, iou_type=iou_type, **kwargs)
         self.force_single_mask = force_single_mask
 
+    # pyrefly: ignore [bad-override]
     def process_results(
         self, find_stages, find_metadatas: BatchedInferenceMetadata, **kwargs
     ):
+        # pyrefly: ignore [bad-argument-type]
         assert len(find_stages) == len(find_metadatas)
         results = {}
+        # pyrefly: ignore [bad-argument-type]
         for outputs, meta in zip(find_stages, find_metadatas):
             if self.force_single_mask:
                 scores, labels = outputs["pred_logits"].max(-1)

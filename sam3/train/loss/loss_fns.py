@@ -1,5 +1,7 @@
 # Copyright (c) Meta Platforms, Inc. and affiliates. All Rights Reserved
 
+# pyre-unsafe
+
 import logging
 import warnings
 
@@ -7,11 +9,8 @@ import torch
 import torch.distributed
 import torch.nn.functional as F
 import torchmetrics
-
 from sam3.model import box_ops
-
 from sam3.model.data_misc import interpolate
-
 from sam3.train.loss.sigmoid_focal_loss import (
     triton_sigmoid_focal_loss,
     triton_sigmoid_focal_loss_reduce,
@@ -325,7 +324,9 @@ class IABCEMdetr(LossWithWeights):
         if num_det_queries is not None:
             logging.warning("note: it's not needed to set num_det_queries anymore")
         if self.use_separate_loss_for_det_and_trk:
-            assert not self.weak_loss, "Do not use weak_loss in this case -- set separate loss for detection and tracking queries instead"
+            assert not self.weak_loss, (
+                "Do not use weak_loss in this case -- set separate loss for detection and tracking queries instead"
+            )
             self.det_exhaustive_loss_scale_pos = det_exhaustive_loss_scale_pos
             self.det_exhaustive_loss_scale_neg = det_exhaustive_loss_scale_neg
             self.det_non_exhaustive_loss_scale_pos = det_non_exhaustive_loss_scale_pos
@@ -340,8 +341,11 @@ class IABCEMdetr(LossWithWeights):
                 and det_non_exhaustive_loss_scale_neg == 1.0
                 and trk_loss_scale_pos == 1.0
                 and trk_loss_scale_neg == 1.0
-            ), "If not using separate loss for detection and tracking queries, separate detection and tracking loss scales should all be 1.0"
+            ), (
+                "If not using separate loss for detection and tracking queries, separate detection and tracking loss scales should all be 1.0"
+            )
 
+    # pyrefly: ignore [bad-override]
     def get_loss(self, outputs, targets, indices, num_boxes):
         assert len(outputs["pred_logits"].shape) > 2, "Incorrect predicted logits shape"
         assert outputs["pred_logits"].shape[-1] == 1, "Incorrect predicted logits shape"
@@ -441,7 +445,9 @@ class IABCEMdetr(LossWithWeights):
                 pass
 
         if self.weak_loss:
-            assert not self.use_separate_loss_for_det_and_trk, "Do not use weak_loss in this case -- set separate loss for detection and tracking queries instead"
+            assert not self.use_separate_loss_for_det_and_trk, (
+                "Do not use weak_loss in this case -- set separate loss for detection and tracking queries instead"
+            )
 
             # nullify the negative loss for the non-exhaustive classes
             assert loss_bce.shape[0] == targets["is_exhaustive"].shape[0]
@@ -495,9 +501,9 @@ class IABCEMdetr(LossWithWeights):
                 loss_bce = loss_bce.mean()
             else:
                 assert isinstance(self.pad_n_queries, int)
-                assert (
-                    loss_bce.size(1) < self.pad_n_queries
-                ), f"The number of predictions is more than the expected total after padding. Got {loss_bce.size(1)} predictions."
+                assert loss_bce.size(1) < self.pad_n_queries, (
+                    f"The number of predictions is more than the expected total after padding. Got {loss_bce.size(1)} predictions."
+                )
                 loss_bce = loss_bce.sum() / (self.pad_n_queries * loss_bce.size(0))
 
         bce_f1 = torchmetrics.functional.f1_score(
@@ -528,6 +534,7 @@ class Boxes(LossWithWeights):
         )
         self.target_keys.extend(["boxes", "boxes_xyxy"])
 
+    # pyrefly: ignore [bad-override]
     def get_loss(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
         targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
@@ -633,6 +640,7 @@ class Masks(LossWithWeights):
 
         return losses
 
+    # pyrefly: ignore [bad-override]
     def get_loss(self, outputs, targets, indices, num_boxes):
         """Compute the losses related to the masks: the focal loss and the dice loss.
         targets dicts must contain the key "masks" containing a tensor of dim [nb_target_boxes, h, w]
@@ -1020,6 +1028,7 @@ class SemanticSegCriterion(LossWithWeights):
         self.presence_head = presence_head
         self.presence_loss = presence_loss
 
+    # pyrefly: ignore [bad-override]
     def get_loss(self, out_dict, targets):
         outputs = out_dict["semantic_seg"]
         presence_logit = out_dict["presence_logit"]
@@ -1165,6 +1174,7 @@ class Det2TrkAssoc(LossWithWeights):
         if self.use_fp_loss:
             self.target_keys.append("is_exhaustive")
 
+    # pyrefly: ignore [bad-override]
     def get_loss(self, outputs, targets, indices, num_boxes):
         det2trk_assoc_logits = outputs["det2trk_assoc_logits"]
         device = det2trk_assoc_logits.device
@@ -1232,6 +1242,7 @@ class TrackingByDetectionAssoc(LossWithWeights):
         assert "loss_det2trk_assoc" in self.weight_dict
         assert "loss_trk2det_assoc" in self.weight_dict
 
+    # pyrefly: ignore [bad-override]
     def get_loss(self, outputs, targets, indices, num_boxes):
         # Part A: gather object id matching between detection and tracking
         det2trk_assoc_logits = outputs["det2trk_assoc_logits"]  # (B, Q_det+1, Q_trk+1)

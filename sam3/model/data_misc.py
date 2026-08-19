@@ -50,6 +50,7 @@ class NestedTensor:
         self.tensors = self.tensors.pin_memory(device)
         if self.mask is not None:
             self.mask = self.mask.pin_memory(device)
+        return self
 
 
 # Register NestedTensor as a pytree node so tree_map_only can traverse into it

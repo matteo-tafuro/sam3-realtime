@@ -281,9 +281,13 @@ class Sam3StreamInference(Sam3VideoBase):
         inference_state["num_frames"] = img_batch_ref.shape[0] if isinstance(img_batch_ref, torch.Tensor) else len(img_batch_ref)
         if inference_state["tracker_inference_states"]:
             hint = self.tracker_num_frames_hint
-            trk_num_frames = (
-                hint if hint and hint > 0 else inference_state["num_frames"]
-            )
+            # Clamp to at least the true stream length: the tracker's propagation
+            # requires num_frames > frame_idx, so a hint smaller than the current
+            # length would make `_get_processing_order` yield no frames and trip the
+            # "exactly one propagated frame" assert. The hint is meant to *raise* the
+            # reported length (to the training regime), never lower it.
+            true_len = inference_state["num_frames"]
+            trk_num_frames = max(hint, true_len) if hint and hint > 0 else true_len
             for trk_state in inference_state["tracker_inference_states"]:
                 # Report a (large, constant) video length to the tracker so its
                 # object-pointer memory budget and temporal-PE normalizer match the
@@ -421,7 +425,12 @@ class Sam3StreamInference(Sam3VideoBase):
 
         # Bound tracker mask-memory growth for long streams by trimming the large
         # per-frame memory tensors of frames that can no longer be attended to.
-        self._trim_tracker_memory(inference_state, frame_idx)
+        # Only trim when processing the newest frame: the trimming/eviction logic
+        # assumes strictly forward progress, so we skip it if inference is (re)run on
+        # an earlier frame (random-access prompting), where an evicted frame could
+        # still be selected as memory again.
+        if frame_idx >= inference_state["curr_frame_idx"]:
+            self._trim_tracker_memory(inference_state, frame_idx)
 
         # Do not cache yet; caching happens after postprocess below (with suppression filtering)
 
@@ -679,6 +688,14 @@ class Sam3StreamInference(Sam3VideoBase):
         still be read as a fallback. This is output-preserving: it never removes a
         tensor that could still be attended, and it never deletes a dict entry (so
         the ``len(cond_frame_outputs) > 0`` invariant is untouched).
+
+        Assumes strictly forward (monotonic) frame progression -- the normal
+        streaming mode. "Unreachable forever" only holds because inference advances
+        to ever-newer frames; the caller only invokes trimming on the newest frame
+        for this reason. If you run inference or add prompts on an *earlier*
+        ``frame_idx`` (random-access), ``select_closest_cond_frames`` could pick an
+        already-evicted conditioning frame whose ``maskmem_features`` is gone, so
+        set ``evict_stale_cond_frames=False`` for that usage.
         """
         tracker = self.tracker
         max_cond = getattr(tracker, "max_cond_frames_in_attn", -1)

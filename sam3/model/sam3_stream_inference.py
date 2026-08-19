@@ -48,6 +48,13 @@ class Sam3StreamInference(Sam3VideoBase):
         # `maskmem_features`/`maskmem_pos_enc` dropped (and are made non-selectable),
         # bounding GPU memory for long streams. Set to 0/None to disable.
         mem_bank_max_frames: int = 320,
+        # Whether to also evict the mask-memory of *conditioning* frames that can no
+        # longer be selected for attention. Reconditioning adds a conditioning frame
+        # every `recondition_every_nth_frame` frames, but only the
+        # `max_cond_frames_in_attn` most recent are ever attended in a forward-only
+        # stream; older ones are dead GPU memory. Output-preserving (only drops
+        # tensors that are provably unreachable). Set False to disable.
+        evict_stale_cond_frames: bool = True,
         # Optional faster preprocessing: resize/normalize on the GPU instead of via
         # PIL on the CPU (~4x faster ingest). Off by default because GPU resampling
         # differs slightly from PIL antialiasing, which can perturb outputs
@@ -62,6 +69,7 @@ class Sam3StreamInference(Sam3VideoBase):
         self.compile_model = compile_model
         self.max_cached_frames = max_cached_frames
         self.mem_bank_max_frames = mem_bank_max_frames
+        self.evict_stale_cond_frames = evict_stale_cond_frames
         self.fast_preprocess = fast_preprocess
 
     @torch.inference_mode()
@@ -635,6 +643,56 @@ class Sam3StreamInference(Sam3VideoBase):
                 for od in per_obj:
                     if t in od and od[t].get("maskmem_features") is not None:
                         od[t] = self._trim_frame_out(od[t])
+
+        if self.evict_stale_cond_frames:
+            self._evict_stale_cond_frames(inference_state, frame_idx, r)
+
+    def _evict_stale_cond_frames(self, inference_state, frame_idx, r):
+        """Drop mask-memory from conditioning frames that can never be attended again.
+
+        In a forward-only stream with ``keep_first_cond_frame=False``,
+        ``select_closest_cond_frames`` will, for the current frame and every future
+        frame, select at most ``max_cond_frames_in_attn`` conditioning frames -- the
+        most recent ones. Any older conditioning frame is therefore unreachable via
+        the mask-memory path forever. We drop its ``maskmem_features`` (keeping
+        ``obj_ptr``/``object_score_logits`` so the object-pointer path is unaffected),
+        but only once it is also older than the non-conditioning memory window
+        (``num_maskmem * r`` frames), where an unselected conditioning frame could
+        still be read as a fallback. This is output-preserving: it never removes a
+        tensor that could still be attended, and it never deletes a dict entry (so
+        the ``len(cond_frame_outputs) > 0`` invariant is untouched).
+        """
+        tracker = self.tracker
+        max_cond = getattr(tracker, "max_cond_frames_in_attn", -1)
+        if max_cond is None or max_cond <= 0:
+            return  # unbounded conditioning attention -> nothing is unreachable
+        keep_first = getattr(tracker, "keep_first_cond_frame", False)
+        noncond_window = r * tracker.num_maskmem
+
+        for st in inference_state["tracker_inference_states"]:
+            cond = st["output_dict"]["cond_frame_outputs"]
+            if len(cond) <= max_cond:
+                continue
+            cond_per_obj = [
+                d["cond_frame_outputs"]
+                for d in st.get("output_dict_per_obj", {}).values()
+            ]
+            ordered = sorted(cond.keys())
+            if keep_first:
+                protected = {ordered[0]}
+                if max_cond > 1:
+                    protected |= set(ordered[-(max_cond - 1):])
+            else:
+                protected = set(ordered[-max_cond:])
+
+            for i in ordered:
+                if i in protected or i >= frame_idx - noncond_window:
+                    continue
+                if cond[i].get("maskmem_features") is not None:
+                    cond[i] = self._trim_frame_out(cond[i])
+                    for od in cond_per_obj:
+                        if i in od and od[i].get("maskmem_features") is not None:
+                            od[i] = self._trim_frame_out(od[i])
 
     def _compile_model(self):
         is_compiled = getattr(self, "_model_is_compiled", False)

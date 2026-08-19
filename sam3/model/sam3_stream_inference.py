@@ -55,6 +55,17 @@ class Sam3StreamInference(Sam3VideoBase):
         # stream; older ones are dead GPU memory. Output-preserving (only drops
         # tensors that are provably unreachable). Set False to disable.
         evict_stale_cond_frames: bool = True,
+        # The video length reported to the tracker's memory-conditioning code. In the
+        # offline model this is the full (known) video length; in a stream it would
+        # otherwise grow from 1, and `min(num_frames, max_obj_ptrs_in_encoder)` in
+        # `_prepare_memory_conditioned_features`/`frame_filter` would then shrink the
+        # object-pointer budget and the temporal-position-encoding normalizer for the
+        # first ~`max_obj_ptrs_in_encoder` frames -- a train/test mismatch on exactly
+        # the frames right after a prompt. We instead report a large constant so the
+        # tracker always uses its full, training-consistent budget. Set to 0/None to
+        # fall back to the true (growing) stream length. Only affects the tracker's
+        # memory selection; the detector's frame indexing is unchanged.
+        tracker_num_frames_hint: int = 1_000_000_000,
         # Optional faster preprocessing: resize/normalize on the GPU instead of via
         # PIL on the CPU (~4x faster ingest). Off by default because GPU resampling
         # differs slightly from PIL antialiasing, which can perturb outputs
@@ -70,6 +81,7 @@ class Sam3StreamInference(Sam3VideoBase):
         self.max_cached_frames = max_cached_frames
         self.mem_bank_max_frames = mem_bank_max_frames
         self.evict_stale_cond_frames = evict_stale_cond_frames
+        self.tracker_num_frames_hint = tracker_num_frames_hint
         self.fast_preprocess = fast_preprocess
 
     @torch.inference_mode()
@@ -268,9 +280,15 @@ class Sam3StreamInference(Sam3VideoBase):
         img_batch_ref = inference_state["input_batch"].img_batch
         inference_state["num_frames"] = img_batch_ref.shape[0] if isinstance(img_batch_ref, torch.Tensor) else len(img_batch_ref)
         if inference_state["tracker_inference_states"]:
+            hint = self.tracker_num_frames_hint
+            trk_num_frames = (
+                hint if hint and hint > 0 else inference_state["num_frames"]
+            )
             for trk_state in inference_state["tracker_inference_states"]:
-                # Extend tracker-visible video length so it can propagate to this frame
-                trk_state["num_frames"] = inference_state["num_frames"]
+                # Report a (large, constant) video length to the tracker so its
+                # object-pointer memory budget and temporal-PE normalizer match the
+                # offline/training regime instead of shrinking on early stream frames.
+                trk_state["num_frames"] = trk_num_frames
                 # Ensure original video resolution is set for resizing masks
                 if trk_state.get("video_height", None) is None:
                     trk_state["video_height"] = inference_state["orig_height"]

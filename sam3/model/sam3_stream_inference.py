@@ -48,6 +48,24 @@ class Sam3StreamInference(Sam3VideoBase):
         # `maskmem_features`/`maskmem_pos_enc` dropped (and are made non-selectable),
         # bounding GPU memory for long streams. Set to 0/None to disable.
         mem_bank_max_frames: int = 320,
+        # Whether to also evict the mask-memory of *conditioning* frames that can no
+        # longer be selected for attention. Reconditioning adds a conditioning frame
+        # every `recondition_every_nth_frame` frames, but only the
+        # `max_cond_frames_in_attn` most recent are ever attended in a forward-only
+        # stream; older ones are dead GPU memory. Output-preserving (only drops
+        # tensors that are provably unreachable). Set False to disable.
+        evict_stale_cond_frames: bool = True,
+        # The video length reported to the tracker's memory-conditioning code. In the
+        # offline model this is the full (known) video length; in a stream it would
+        # otherwise grow from 1, and `min(num_frames, max_obj_ptrs_in_encoder)` in
+        # `_prepare_memory_conditioned_features`/`frame_filter` would then shrink the
+        # object-pointer budget and the temporal-position-encoding normalizer for the
+        # first ~`max_obj_ptrs_in_encoder` frames -- a train/test mismatch on exactly
+        # the frames right after a prompt. We instead report a large constant so the
+        # tracker always uses its full, training-consistent budget. Set to 0/None to
+        # fall back to the true (growing) stream length. Only affects the tracker's
+        # memory selection; the detector's frame indexing is unchanged.
+        tracker_num_frames_hint: int = 1_000_000_000,
         # Optional faster preprocessing: resize/normalize on the GPU instead of via
         # PIL on the CPU (~4x faster ingest). Off by default because GPU resampling
         # differs slightly from PIL antialiasing, which can perturb outputs
@@ -62,6 +80,8 @@ class Sam3StreamInference(Sam3VideoBase):
         self.compile_model = compile_model
         self.max_cached_frames = max_cached_frames
         self.mem_bank_max_frames = mem_bank_max_frames
+        self.evict_stale_cond_frames = evict_stale_cond_frames
+        self.tracker_num_frames_hint = tracker_num_frames_hint
         self.fast_preprocess = fast_preprocess
 
     @torch.inference_mode()
@@ -260,9 +280,19 @@ class Sam3StreamInference(Sam3VideoBase):
         img_batch_ref = inference_state["input_batch"].img_batch
         inference_state["num_frames"] = img_batch_ref.shape[0] if isinstance(img_batch_ref, torch.Tensor) else len(img_batch_ref)
         if inference_state["tracker_inference_states"]:
+            hint = self.tracker_num_frames_hint
+            # Clamp to at least the true stream length: the tracker's propagation
+            # requires num_frames > frame_idx, so a hint smaller than the current
+            # length would make `_get_processing_order` yield no frames and trip the
+            # "exactly one propagated frame" assert. The hint is meant to *raise* the
+            # reported length (to the training regime), never lower it.
+            true_len = inference_state["num_frames"]
+            trk_num_frames = max(hint, true_len) if hint and hint > 0 else true_len
             for trk_state in inference_state["tracker_inference_states"]:
-                # Extend tracker-visible video length so it can propagate to this frame
-                trk_state["num_frames"] = inference_state["num_frames"]
+                # Report a (large, constant) video length to the tracker so its
+                # object-pointer memory budget and temporal-PE normalizer match the
+                # offline/training regime instead of shrinking on early stream frames.
+                trk_state["num_frames"] = trk_num_frames
                 # Ensure original video resolution is set for resizing masks
                 if trk_state.get("video_height", None) is None:
                     trk_state["video_height"] = inference_state["orig_height"]
@@ -395,7 +425,12 @@ class Sam3StreamInference(Sam3VideoBase):
 
         # Bound tracker mask-memory growth for long streams by trimming the large
         # per-frame memory tensors of frames that can no longer be attended to.
-        self._trim_tracker_memory(inference_state, frame_idx)
+        # Only trim when processing the newest frame: the trimming/eviction logic
+        # assumes strictly forward progress, so we skip it if inference is (re)run on
+        # an earlier frame (random-access prompting), where an evicted frame could
+        # still be selected as memory again.
+        if frame_idx >= inference_state["curr_frame_idx"]:
+            self._trim_tracker_memory(inference_state, frame_idx)
 
         # Do not cache yet; caching happens after postprocess below (with suppression filtering)
 
@@ -635,6 +670,64 @@ class Sam3StreamInference(Sam3VideoBase):
                 for od in per_obj:
                     if t in od and od[t].get("maskmem_features") is not None:
                         od[t] = self._trim_frame_out(od[t])
+
+        if self.evict_stale_cond_frames:
+            self._evict_stale_cond_frames(inference_state, frame_idx, r)
+
+    def _evict_stale_cond_frames(self, inference_state, frame_idx, r):
+        """Drop mask-memory from conditioning frames that can never be attended again.
+
+        In a forward-only stream with ``keep_first_cond_frame=False``,
+        ``select_closest_cond_frames`` will, for the current frame and every future
+        frame, select at most ``max_cond_frames_in_attn`` conditioning frames -- the
+        most recent ones. Any older conditioning frame is therefore unreachable via
+        the mask-memory path forever. We drop its ``maskmem_features`` (keeping
+        ``obj_ptr``/``object_score_logits`` so the object-pointer path is unaffected),
+        but only once it is also older than the non-conditioning memory window
+        (``num_maskmem * r`` frames), where an unselected conditioning frame could
+        still be read as a fallback. This is output-preserving: it never removes a
+        tensor that could still be attended, and it never deletes a dict entry (so
+        the ``len(cond_frame_outputs) > 0`` invariant is untouched).
+
+        Assumes strictly forward (monotonic) frame progression -- the normal
+        streaming mode. "Unreachable forever" only holds because inference advances
+        to ever-newer frames; the caller only invokes trimming on the newest frame
+        for this reason. If you run inference or add prompts on an *earlier*
+        ``frame_idx`` (random-access), ``select_closest_cond_frames`` could pick an
+        already-evicted conditioning frame whose ``maskmem_features`` is gone, so
+        set ``evict_stale_cond_frames=False`` for that usage.
+        """
+        tracker = self.tracker
+        max_cond = getattr(tracker, "max_cond_frames_in_attn", -1)
+        if max_cond is None or max_cond <= 0:
+            return  # unbounded conditioning attention -> nothing is unreachable
+        keep_first = getattr(tracker, "keep_first_cond_frame", False)
+        noncond_window = r * tracker.num_maskmem
+
+        for st in inference_state["tracker_inference_states"]:
+            cond = st["output_dict"]["cond_frame_outputs"]
+            if len(cond) <= max_cond:
+                continue
+            cond_per_obj = [
+                d["cond_frame_outputs"]
+                for d in st.get("output_dict_per_obj", {}).values()
+            ]
+            ordered = sorted(cond.keys())
+            if keep_first:
+                protected = {ordered[0]}
+                if max_cond > 1:
+                    protected |= set(ordered[-(max_cond - 1):])
+            else:
+                protected = set(ordered[-max_cond:])
+
+            for i in ordered:
+                if i in protected or i >= frame_idx - noncond_window:
+                    continue
+                if cond[i].get("maskmem_features") is not None:
+                    cond[i] = self._trim_frame_out(cond[i])
+                    for od in cond_per_obj:
+                        if i in od and od[i].get("maskmem_features") is not None:
+                            od[i] = self._trim_frame_out(od[i])
 
     def _compile_model(self):
         is_compiled = getattr(self, "_model_is_compiled", False)
